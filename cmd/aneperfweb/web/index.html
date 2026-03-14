@@ -75,7 +75,7 @@ h2 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; padding-bottom: 4px;
   "imports": {
     "preact": "https://esm.sh/preact@10.25.4",
     "preact/hooks": "https://esm.sh/preact@10.25.4/hooks",
-    "htm/preact": "https://esm.sh/htm@3.1.1/preact"
+    "htm/preact": "https://esm.sh/htm@3.1.1/preact?deps=preact@10.25.4"
   }
 }
 </script>
@@ -178,7 +178,7 @@ function App() {
   }, []);
 
   if (!delta) {
-    return html\`<div class="header"><h1>aneperf</h1> <span class="dot \${connected ? 'on' : 'off'}"></span> <span class="time">waiting for data…</span></div>\`;
+    return html`<div class="header"><h1>aneperf</h1> <span class="dot ${connected ? 'on' : 'off'}"></span> <span class="time">waiting for data…</span></div>`;
   }
 
   const cat = classifyChannels(delta.channels);
@@ -188,60 +188,60 @@ function App() {
   let activePct = computeActivePctFromCE(cat.computeEn);
   if (activePct === 0) activePct = computeActivePctFromVoltage(cat.voltage);
 
-  return html\`
-    <\${DeviceHeader} dev=\${dev} connected=\${connected} />
-    <\${PowerSection} powerW=\${delta.ane_power_watts} activePct=\${activePct} history=\${historyRef.current} energy=\${cat.energy} durationMs=\${durationMs} />
-    <\${ComputeUtilization} channels=\${cat.computeEn} />
-    <\${StateSection} title="Voltage States" channels=\${cat.voltage} />
-    <\${StateSection} title="DCS Frequency" channels=\${cat.dcsFloor} />
-    <\${BandwidthSection} channels=\${cat.bandwidth} />
-    <\${ThrottleSection} channels=\${cat.throttle} />
-    <\${CounterTable} channels=\${cat.interrupt} />
-  \`;
+  return html`
+    <${DeviceHeader} dev=${dev} connected=${connected} />
+    <${PowerSection} powerW=${delta.ane_power_watts} activePct=${activePct} history=${historyRef.current} energy=${cat.energy} durationMs=${durationMs} />
+    <${ComputeUtilization} channels=${cat.computeEn} />
+    <${StateSection} title="Voltage States" channels=${cat.voltage} />
+    <${StateSection} title="DCS Frequency" channels=${cat.dcsFloor} />
+    <${BandwidthSection} channels=${cat.bandwidth} />
+    <${ThrottleSection} channels=${cat.throttle} />
+    <${CounterTable} channels=${cat.interrupt} />
+  `;
 }
 
 function DeviceHeader({ dev, connected }) {
   const fwClass = dev.firmware_loaded ? 'fw-ok' : 'fw-bad';
   const fwText = dev.firmware_loaded ? '✓' : '✗';
   const now = new Date().toLocaleTimeString();
-  return html\`
+  return html`
     <div class="header">
       <h1>aneperf</h1>
-      <span class="dot \${connected ? 'on' : 'off'}"></span>
-      <span class="time">\${now}</span>
+      <span class="dot ${connected ? 'on' : 'off'}"></span>
+      <span class="time">${now}</span>
     </div>
     <div class="device">
-      <span class="arch">\${dev.architecture || '—'}</span>
-      <span>\${dev.num_cores || 0} cores</span>
-      <span>fw:<span class="\${fwClass}">\${fwText}</span></span>
-      <span>pwr:\${dev.power_state || 0}/\${dev.max_power_state || 0}</span>
+      <span class="arch">${dev.architecture || '—'}</span>
+      <span>${dev.num_cores || 0} cores</span>
+      <span>fw:<span class="${fwClass}">${fwText}</span></span>
+      <span>pwr:${dev.power_state || 0}/${dev.max_power_state || 0}</span>
     </div>
-  \`;
+  `;
 }
 
 function PowerSection({ powerW, activePct, history, energy, durationMs }) {
   const barPct = Math.min(activePct, 100);
-  return html\`
+  return html`
     <div class="section">
       <h2>Power</h2>
-      <div><span class="power-big">\${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
+      <div><span class="power-big">${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
       <div style="margin-top:8px;font-size:12px;color:var(--dim)">ANE Active</div>
       <div class="bar-outer">
-        <div class="bar-inner" style="width:\${barPct}%;background:var(--green);opacity:0.6"></div>
-        <span class="bar-label">\${activePct.toFixed(1)}%</span>
+        <div class="bar-inner" style="width:${barPct}%;background:var(--green);opacity:0.6"></div>
+        <span class="bar-label">${activePct.toFixed(1)}%</span>
       </div>
-      <\${Sparkline} data=\${history} />
-      \${energy.map(ch => {
+      <${Sparkline} data=${history} />
+      ${energy.map(ch => {
         const watts = ch.value ? energyToWatts(ch.value, ch.unit, durationMs) : 0;
-        return html\`
+        return html`
           <div class="energy-row">
-            <span>\${ch.channel}</span>
-            <span>\${ch.value ? html\`<span class="val">\${ch.value} \${ch.unit}</span> <span class="watts">(\${watts.toFixed(3)}W)</span>\` : html\`<span>0 \${ch.unit}</span>\`}</span>
+            <span>${ch.channel}</span>
+            <span>${ch.value ? html`<span class="val">${ch.value} ${ch.unit}</span> <span class="watts">(${watts.toFixed(3)}W)</span>` : html`<span>0 ${ch.unit}</span>`}</span>
           </div>
-        \`;
+        `;
       })}
     </div>
-  \`;
+  `;
 }
 
 function Sparkline({ data }) {
@@ -251,15 +251,15 @@ function Sparkline({ data }) {
   const points = data.map((v, i) => {
     const x = (i / (data.length - 1)) * w;
     const y = h - (v / max) * h;
-    return \`\${x},\${y}\`;
+    return `${x},${y}`;
   }).join(' ');
-  return html\`
+  return html`
     <div class="sparkline">
-      <svg width="\${w}" height="\${h}" viewBox="0 0 \${w} \${h}">
-        <polyline points="\${points}" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-linejoin="round" />
+      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+        <polyline points="${points}" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-linejoin="round" />
       </svg>
     </div>
-  \`;
+  `;
 }
 
 function ComputeUtilization({ channels }) {
@@ -278,23 +278,23 @@ function ComputeUtilization({ channels }) {
     items.push({ channel: ch.channel, rows });
   }
   if (items.length === 0) return null;
-  return html\`
+  return html`
     <div class="section">
       <h2>Compute Utilization</h2>
-      \${items.map(item => html\`
-        <div style="color:var(--dim);font-size:11px;margin-bottom:4px">\${item.channel}</div>
+      ${items.map(item => html`
+        <div style="color:var(--dim);font-size:11px;margin-bottom:4px">${item.channel}</div>
         <div class="histogram">
-          \${item.rows.map(r => html\`
+          ${item.rows.map(r => html`
             <div class="bar-row">
-              <span class="bar-name">\${r.name}</span>
-              <div class="bar-track"><div class="bar-fill" style="width:\${r.fill}%"></div></div>
-              <span class="bar-pct">\${r.pct.toFixed(1)}%</span>
+              <span class="bar-name">${r.name}</span>
+              <div class="bar-track"><div class="bar-fill" style="width:${r.fill}%"></div></div>
+              <span class="bar-pct">${r.pct.toFixed(1)}%</span>
             </div>
-          \`)}
+          `)}
         </div>
-      \`)}
+      `)}
     </div>
-  \`;
+  `;
 }
 
 function StateSection({ title, channels }) {
@@ -307,10 +307,10 @@ function StateSection({ title, channels }) {
   }
   if (!hasActivity) return null;
 
-  return html\`
+  return html`
     <div class="section">
-      <h2>\${title}</h2>
-      \${channels.map(ch => {
+      <h2>${title}</h2>
+      ${channels.map(ch => {
         let total = 0;
         for (const s of (ch.states || [])) total += s.residency_ns;
         if (total === 0) return null;
@@ -322,17 +322,17 @@ function StateSection({ title, channels }) {
           if (pct >= 0.5) active.push({ name, pct });
           if (pct > dominantPct) { dominantPct = pct; dominantName = name; }
         }
-        return html\`
+        return html`
           <div class="channel-row">
-            <span class="channel-name">\${ch.channel}</span>
+            <span class="channel-name">${ch.channel}</span>
             <div class="state-chips">
-              \${active.map(s => html\`<span class="state-chip \${s.name === dominantName ? 'dominant' : ''}">\${s.name} \${Math.round(s.pct)}%</span>\`)}
+              ${active.map(s => html`<span class="state-chip ${s.name === dominantName ? 'dominant' : ''}">${s.name} ${Math.round(s.pct)}%</span>`)}
             </div>
           </div>
-        \`;
+        `;
       })}
     </div>
-  \`;
+  `;
 }
 
 function BandwidthSection({ channels }) {
@@ -345,10 +345,10 @@ function BandwidthSection({ channels }) {
   }
   if (!hasActivity) return null;
 
-  return html\`
+  return html`
     <div class="section">
       <h2>Bandwidth</h2>
-      \${channels.map(ch => {
+      ${channels.map(ch => {
         let total = 0;
         for (const s of (ch.states || [])) total += s.residency_ns;
         if (total === 0) return null;
@@ -358,51 +358,51 @@ function BandwidthSection({ channels }) {
           .sort((a, b) => b.pct - a.pct)
           .slice(0, 5);
         if (active.length === 0) return null;
-        return html\`
+        return html`
           <div class="bw-row">
-            <span class="bw-name">\${ch.channel}</span>
-            \${active.map(s => html\`<span class="bw-chip">\${s.name}</span> <span class="bw-pct">\${Math.round(s.pct)}%</span> \`)}
+            <span class="bw-name">${ch.channel}</span>
+            ${active.map(s => html`<span class="bw-chip">${s.name}</span> <span class="bw-pct">${Math.round(s.pct)}%</span> `)}
           </div>
-        \`;
+        `;
       })}
     </div>
-  \`;
+  `;
 }
 
 function ThrottleSection({ channels }) {
   if (!channels || channels.length === 0) return null;
   const active = channels.filter(ch => ch.value > 0);
   if (active.length === 0) return null;
-  return html\`
+  return html`
     <div class="section">
       <h2 class="throttle-alert">Throttle</h2>
-      \${active.map(ch => html\`
+      ${active.map(ch => html`
         <div class="energy-row">
-          <span>\${ch.channel}</span>
-          <span class="throttle-alert">\${ch.value} \${ch.unit}</span>
+          <span>${ch.channel}</span>
+          <span class="throttle-alert">${ch.value} ${ch.unit}</span>
         </div>
-      \`)}
+      `)}
     </div>
-  \`;
+  `;
 }
 
 function CounterTable({ channels }) {
   if (!channels || channels.length === 0) return null;
   const active = channels.filter(ch => ch.value !== 0);
   if (active.length === 0) return null;
-  return html\`
+  return html`
     <div class="section">
       <h2>Counters</h2>
       <table class="counter-table">
         <tbody>
-          \${active.map(ch => html\`<tr><td>\${ch.channel}</td><td>\${ch.value}</td></tr>\`)}
+          ${active.map(ch => html`<tr><td>${ch.channel}</td><td>${ch.value}</td></tr>`)}
         </tbody>
       </table>
     </div>
-  \`;
+  `;
 }
 
-render(html\`<\${App} />\`, document.getElementById('app'));
+render(html`<${App} />`, document.getElementById('app'));
 </script>
 </body>
 </html>
