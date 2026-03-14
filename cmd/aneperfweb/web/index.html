@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aneperf — ANE Dashboard</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0a0a0a; --bg1: #141414; --bg2: #1e1e1e;
+  --fg: #c8c8c8; --dim: #666; --border: #2a2a2a;
+  --green: #4ec970; --cyan: #56c8d8; --blue: #5b9bd5;
+  --yellow: #d4a843; --red: #d45050; --orange: #d88040;
+  --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 13px; line-height: 1.5; padding: 16px; max-width: 960px; margin: 0 auto; }
+h1 { font-size: 16px; color: var(--cyan); font-weight: 600; }
+h2 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.header .time { color: var(--dim); font-size: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot.off { background: var(--red); }
+
+.device { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim); font-size: 12px; margin-bottom: 16px; }
+.device .arch { color: var(--fg); font-weight: 600; }
+.device .fw-ok { color: var(--green); }
+.device .fw-bad { color: var(--red); }
+
+.section { background: var(--bg1); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+
+.power-big { font-size: 28px; font-weight: 700; color: var(--green); }
+.power-unit { font-size: 14px; color: var(--dim); margin-left: 4px; }
+
+.bar-outer { background: var(--bg); border-radius: 3px; height: 18px; position: relative; overflow: hidden; margin: 6px 0; }
+.bar-inner { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.bar-label { position: absolute; right: 6px; top: 0; line-height: 18px; font-size: 11px; color: var(--fg); }
+
+.sparkline { margin: 8px 0; }
+.sparkline svg { display: block; }
+
+.energy-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); padding: 2px 0; }
+.energy-row .val { color: var(--fg); }
+.energy-row .watts { color: var(--green); }
+
+.histogram .bar-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 12px; }
+.histogram .bar-name { width: 40px; text-align: right; color: var(--cyan); }
+.histogram .bar-track { flex: 1; background: var(--bg); border-radius: 2px; height: 14px; overflow: hidden; }
+.histogram .bar-fill { height: 100%; background: var(--green); opacity: 0.6; border-radius: 2px; transition: width 0.4s ease; }
+.histogram .bar-pct { width: 48px; text-align: right; font-size: 11px; color: var(--dim); }
+
+.state-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.state-chip { font-size: 11px; padding: 2px 8px; border-radius: 3px; background: var(--bg); border: 1px solid var(--border); }
+.state-chip.dominant { border-color: var(--blue); color: var(--blue); }
+
+.channel-row { display: flex; align-items: baseline; gap: 8px; margin: 4px 0; font-size: 12px; }
+.channel-name { color: var(--fg); min-width: 180px; }
+
+.counter-table { width: 100%; font-size: 12px; }
+.counter-table td { padding: 2px 8px; }
+.counter-table td:first-child { color: var(--dim); text-align: right; }
+.counter-table td:last-child { color: var(--yellow); }
+
+.throttle-alert { color: var(--yellow); font-weight: 600; }
+.hidden { display: none; }
+
+.bw-row { display: flex; gap: 6px; align-items: baseline; margin: 3px 0; font-size: 12px; }
+.bw-name { min-width: 180px; color: var(--fg); }
+.bw-chip { font-size: 11px; color: var(--cyan); }
+.bw-pct { color: var(--dim); font-size: 11px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "preact": "https://esm.sh/preact@10.25.4",
+    "preact/hooks": "https://esm.sh/preact@10.25.4/hooks",
+    "htm/preact": "https://esm.sh/htm@3.1.1/preact"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { html, render } from 'htm/preact';
+import { useState, useEffect, useRef } from 'preact/hooks';
+
+const HISTORY_LEN = 60;
+
+function classifyChannels(channels) {
+  const c = { energy: [], voltage: [], dcsFloor: [], computeEn: [], bandwidth: [], throttle: [], interrupt: [] };
+  for (const ch of channels || []) {
+    switch (ch.group) {
+      case 'Energy Model':
+        c.energy.push(ch); break;
+      case 'Interrupt Statistics (by index)':
+        c.interrupt.push(ch); break;
+      case 'PMP':
+        if (ch.subgroup === 'SOC Floor') c.voltage.push(ch);
+        else if (ch.subgroup === 'DCS Floor') c.dcsFloor.push(ch);
+        else if (ch.subgroup === 'Fast-Die CE') c.computeEn.push(ch);
+        else if (ch.subgroup && ch.subgroup.includes('BW')) c.bandwidth.push(ch);
+        else if (ch.subgroup && ch.subgroup.startsWith('PWRS')) c.throttle.push(ch);
+        else c.bandwidth.push(ch);
+        break;
+    }
+  }
+  return c;
+}
+
+function computeActivePctFromCE(channels) {
+  for (const ch of channels) {
+    if (!ch.states || ch.states.length === 0) continue;
+    let totalRes = 0, weightedSum = 0;
+    for (const s of ch.states) {
+      totalRes += s.residency_ns;
+      const name = s.name.trim().replace('%', '');
+      const pct = parseFloat(name) || 0;
+      weightedSum += pct * s.residency_ns;
+    }
+    if (totalRes > 0) return weightedSum / totalRes;
+  }
+  return 0;
+}
+
+function computeActivePctFromVoltage(channels) {
+  let maxActive = 0;
+  for (const ch of channels) {
+    if (!ch.states || ch.states.length === 0) continue;
+    let total = 0, vminRes = 0, hasVMIN = false;
+    for (const s of ch.states) {
+      total += s.residency_ns;
+      if (s.name.trim() === 'VMIN') { vminRes = s.residency_ns; hasVMIN = true; }
+    }
+    if (hasVMIN && total > 0) {
+      const active = (total - vminRes) / total * 100;
+      if (active > maxActive) maxActive = active;
+    }
+  }
+  return maxActive;
+}
+
+function energyToWatts(value, unit, intervalMs) {
+  if (intervalMs <= 0) intervalMs = 1000;
+  const rate = value / (intervalMs / 1000);
+  switch (unit) {
+    case 'mJ': return rate / 1e3;
+    case 'uJ': return rate / 1e6;
+    case 'nJ': return rate / 1e9;
+    default: return rate / 1e6;
+  }
+}
+
+function App() {
+  const [delta, setDelta] = useState(null);
+  const [connected, setConnected] = useState(false);
+  const [device, setDevice] = useState(null);
+  const historyRef = useRef([]);
+
+  useEffect(() => {
+    fetch('/api/device').then(r => r.json()).then(setDevice).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const es = new EventSource('/api/stream');
+    es.addEventListener('delta', (e) => {
+      const d = JSON.parse(e.data);
+      setDelta(d);
+      setConnected(true);
+      const h = historyRef.current;
+      h.push(d.ane_power_watts);
+      if (h.length > HISTORY_LEN) h.splice(0, h.length - HISTORY_LEN);
+    });
+    es.onerror = () => setConnected(false);
+    es.onopen = () => setConnected(true);
+    return () => es.close();
+  }, []);
+
+  if (!delta) {
+    return html\`<div class="header"><h1>aneperf</h1> <span class="dot \${connected ? 'on' : 'off'}"></span> <span class="time">waiting for data…</span></div>\`;
+  }
+
+  const cat = classifyChannels(delta.channels);
+  const dev = delta.device || device || {};
+  const durationMs = delta.duration ? delta.duration / 1e6 : 1000;
+
+  let activePct = computeActivePctFromCE(cat.computeEn);
+  if (activePct === 0) activePct = computeActivePctFromVoltage(cat.voltage);
+
+  return html\`
+    <\${DeviceHeader} dev=\${dev} connected=\${connected} />
+    <\${PowerSection} powerW=\${delta.ane_power_watts} activePct=\${activePct} history=\${historyRef.current} energy=\${cat.energy} durationMs=\${durationMs} />
+    <\${ComputeUtilization} channels=\${cat.computeEn} />
+    <\${StateSection} title="Voltage States" channels=\${cat.voltage} />
+    <\${StateSection} title="DCS Frequency" channels=\${cat.dcsFloor} />
+    <\${BandwidthSection} channels=\${cat.bandwidth} />
+    <\${ThrottleSection} channels=\${cat.throttle} />
+    <\${CounterTable} channels=\${cat.interrupt} />
+  \`;
+}
+
+function DeviceHeader({ dev, connected }) {
+  const fwClass = dev.firmware_loaded ? 'fw-ok' : 'fw-bad';
+  const fwText = dev.firmware_loaded ? '✓' : '✗';
+  const now = new Date().toLocaleTimeString();
+  return html\`
+    <div class="header">
+      <h1>aneperf</h1>
+      <span class="dot \${connected ? 'on' : 'off'}"></span>
+      <span class="time">\${now}</span>
+    </div>
+    <div class="device">
+      <span class="arch">\${dev.architecture || '—'}</span>
+      <span>\${dev.num_cores || 0} cores</span>
+      <span>fw:<span class="\${fwClass}">\${fwText}</span></span>
+      <span>pwr:\${dev.power_state || 0}/\${dev.max_power_state || 0}</span>
+    </div>
+  \`;
+}
+
+function PowerSection({ powerW, activePct, history, energy, durationMs }) {
+  const barPct = Math.min(activePct, 100);
+  return html\`
+    <div class="section">
+      <h2>Power</h2>
+      <div><span class="power-big">\${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
+      <div style="margin-top:8px;font-size:12px;color:var(--dim)">ANE Active</div>
+      <div class="bar-outer">
+        <div class="bar-inner" style="width:\${barPct}%;background:var(--green);opacity:0.6"></div>
+        <span class="bar-label">\${activePct.toFixed(1)}%</span>
+      </div>
+      <\${Sparkline} data=\${history} />
+      \${energy.map(ch => {
+        const watts = ch.value ? energyToWatts(ch.value, ch.unit, durationMs) : 0;
+        return html\`
+          <div class="energy-row">
+            <span>\${ch.channel}</span>
+            <span>\${ch.value ? html\`<span class="val">\${ch.value} \${ch.unit}</span> <span class="watts">(\${watts.toFixed(3)}W)</span>\` : html\`<span>0 \${ch.unit}</span>\`}</span>
+          </div>
+        \`;
+      })}
+    </div>
+  \`;
+}
+
+function Sparkline({ data }) {
+  if (!data || data.length < 2) return null;
+  const w = 300, h = 40;
+  const max = Math.max(...data, 0.001);
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h - (v / max) * h;
+    return \`\${x},\${y}\`;
+  }).join(' ');
+  return html\`
+    <div class="sparkline">
+      <svg width="\${w}" height="\${h}" viewBox="0 0 \${w} \${h}">
+        <polyline points="\${points}" fill="none" stroke="var(--green)" stroke-width="1.5" stroke-linejoin="round" />
+      </svg>
+    </div>
+  \`;
+}
+
+function ComputeUtilization({ channels }) {
+  if (!channels || channels.length === 0) return null;
+  const items = [];
+  for (const ch of channels) {
+    if (!ch.states || ch.states.length === 0) continue;
+    let total = 0, maxRes = 0;
+    for (const s of ch.states) { total += s.residency_ns; if (s.residency_ns > maxRes) maxRes = s.residency_ns; }
+    if (total === 0) continue;
+    const rows = ch.states.filter(s => (s.residency_ns / total * 100) >= 0.5).map(s => ({
+      name: s.name.trim(),
+      pct: s.residency_ns / total * 100,
+      fill: maxRes > 0 ? s.residency_ns / maxRes * 100 : 0,
+    }));
+    items.push({ channel: ch.channel, rows });
+  }
+  if (items.length === 0) return null;
+  return html\`
+    <div class="section">
+      <h2>Compute Utilization</h2>
+      \${items.map(item => html\`
+        <div style="color:var(--dim);font-size:11px;margin-bottom:4px">\${item.channel}</div>
+        <div class="histogram">
+          \${item.rows.map(r => html\`
+            <div class="bar-row">
+              <span class="bar-name">\${r.name}</span>
+              <div class="bar-track"><div class="bar-fill" style="width:\${r.fill}%"></div></div>
+              <span class="bar-pct">\${r.pct.toFixed(1)}%</span>
+            </div>
+          \`)}
+        </div>
+      \`)}
+    </div>
+  \`;
+}
+
+function StateSection({ title, channels }) {
+  if (!channels || channels.length === 0) return null;
+  let hasActivity = false;
+  for (const ch of channels) {
+    let total = 0;
+    for (const s of (ch.states || [])) total += s.residency_ns;
+    if (total > 0) { hasActivity = true; break; }
+  }
+  if (!hasActivity) return null;
+
+  return html\`
+    <div class="section">
+      <h2>\${title}</h2>
+      \${channels.map(ch => {
+        let total = 0;
+        for (const s of (ch.states || [])) total += s.residency_ns;
+        if (total === 0) return null;
+        let dominantName = '', dominantPct = 0;
+        const active = [];
+        for (const s of ch.states) {
+          const pct = s.residency_ns / total * 100;
+          const name = s.name.trim();
+          if (pct >= 0.5) active.push({ name, pct });
+          if (pct > dominantPct) { dominantPct = pct; dominantName = name; }
+        }
+        return html\`
+          <div class="channel-row">
+            <span class="channel-name">\${ch.channel}</span>
+            <div class="state-chips">
+              \${active.map(s => html\`<span class="state-chip \${s.name === dominantName ? 'dominant' : ''}">\${s.name} \${Math.round(s.pct)}%</span>\`)}
+            </div>
+          </div>
+        \`;
+      })}
+    </div>
+  \`;
+}
+
+function BandwidthSection({ channels }) {
+  if (!channels || channels.length === 0) return null;
+  let hasActivity = false;
+  for (const ch of channels) {
+    let total = 0;
+    for (const s of (ch.states || [])) total += s.residency_ns;
+    if (total > 0) { hasActivity = true; break; }
+  }
+  if (!hasActivity) return null;
+
+  return html\`
+    <div class="section">
+      <h2>Bandwidth</h2>
+      \${channels.map(ch => {
+        let total = 0;
+        for (const s of (ch.states || [])) total += s.residency_ns;
+        if (total === 0) return null;
+        const active = (ch.states || [])
+          .map(s => ({ name: s.name.trim(), pct: s.residency_ns / total * 100 }))
+          .filter(s => s.pct >= 0.5)
+          .sort((a, b) => b.pct - a.pct)
+          .slice(0, 5);
+        if (active.length === 0) return null;
+        return html\`
+          <div class="bw-row">
+            <span class="bw-name">\${ch.channel}</span>
+            \${active.map(s => html\`<span class="bw-chip">\${s.name}</span> <span class="bw-pct">\${Math.round(s.pct)}%</span> \`)}
+          </div>
+        \`;
+      })}
+    </div>
+  \`;
+}
+
+function ThrottleSection({ channels }) {
+  if (!channels || channels.length === 0) return null;
+  const active = channels.filter(ch => ch.value > 0);
+  if (active.length === 0) return null;
+  return html\`
+    <div class="section">
+      <h2 class="throttle-alert">Throttle</h2>
+      \${active.map(ch => html\`
+        <div class="energy-row">
+          <span>\${ch.channel}</span>
+          <span class="throttle-alert">\${ch.value} \${ch.unit}</span>
+        </div>
+      \`)}
+    </div>
+  \`;
+}
+
+function CounterTable({ channels }) {
+  if (!channels || channels.length === 0) return null;
+  const active = channels.filter(ch => ch.value !== 0);
+  if (active.length === 0) return null;
+  return html\`
+    <div class="section">
+      <h2>Counters</h2>
+      <table class="counter-table">
+        <tbody>
+          \${active.map(ch => html\`<tr><td>\${ch.channel}</td><td>\${ch.value}</td></tr>\`)}
+        </tbody>
+      </table>
+    </div>
+  \`;
+}
+
+render(html\`<\${App} />\`, document.getElementById('app'));
+</script>
+</body>
+</html>
