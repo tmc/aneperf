@@ -71,6 +71,9 @@ func run(addr string, interval time.Duration) error {
 		server.Close()
 	}()
 
+	if webDir != "" {
+		log.Printf("serving web assets from disk: %s", webDir)
+	}
 	log.Printf("listening on %s", addr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		return err
@@ -78,13 +81,31 @@ func run(addr string, interval time.Duration) error {
 	return nil
 }
 
+// webDir is set to serve from disk when the directory exists, enabling
+// live reload during development. Falls back to the embedded copy.
+var webDir string
+
+func init() {
+	// Check common locations for the web directory relative to CWD.
+	for _, dir := range []string{"web", "cmd/aneperfweb/web"} {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			webDir = dir
+			break
+		}
+	}
+}
+
 func handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if webDir != "" {
+		http.ServeFile(w, r, webDir+"/index.html")
+		return
+	}
 	data, err := webFS.ReadFile("web/index.html")
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(data)
 }
 
