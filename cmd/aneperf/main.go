@@ -110,50 +110,11 @@ func runLive(sampler *aneperf.Sampler, interval time.Duration) error {
 	}
 }
 
-// classifyChannels splits PMP channels into categories by subgroup.
-type channelsByCategory struct {
-	energy    []aneperf.Channel // Energy Model
-	voltage   []aneperf.Channel // SOC Floor (VMIN/VNOM/VMAX)
-	dcsFloor  []aneperf.Channel // DCS Floor (F1-F6)
-	computeEn []aneperf.Channel // Fast-Die CE (0%-100%)
-	bandwidth []aneperf.Channel // AF BW + DCS BW + SOC-NI Util BW
-	throttle  []aneperf.Channel // PWRS0 throttle counters
-	interrupt []aneperf.Channel // Interrupt Statistics
-}
-
-func classify(channels []aneperf.Channel) channelsByCategory {
-	var c channelsByCategory
-	for _, ch := range channels {
-		switch ch.Group {
-		case "Energy Model":
-			c.energy = append(c.energy, ch)
-		case "Interrupt Statistics (by index)":
-			c.interrupt = append(c.interrupt, ch)
-		case "PMP":
-			switch {
-			case ch.SubGroup == "SOC Floor":
-				c.voltage = append(c.voltage, ch)
-			case ch.SubGroup == "DCS Floor":
-				c.dcsFloor = append(c.dcsFloor, ch)
-			case ch.SubGroup == "Fast-Die CE":
-				c.computeEn = append(c.computeEn, ch)
-			case strings.Contains(ch.SubGroup, "BW"):
-				c.bandwidth = append(c.bandwidth, ch)
-			case strings.HasPrefix(ch.SubGroup, "PWRS"):
-				c.throttle = append(c.throttle, ch)
-			default:
-				// Unknown PMP subgroup — put in bandwidth as fallback.
-				c.bandwidth = append(c.bandwidth, ch)
-			}
-		}
-	}
-	return c
-}
 
 func printLive(d aneperf.Delta, interval time.Duration) {
 	fmt.Print("\033[2J\033[H")
 
-	cat := classify(d.Channels)
+	cat := aneperf.ClassifyChannels(d.Channels)
 
 	// Header.
 	fmt.Printf("%s aneperf %s%s— %s  (every %s)%s\n",
@@ -177,16 +138,16 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	fmt.Printf("  ANE Power:  %s%.3f W%s\n", ansiGreenBld, d.PowerW, ansiReset)
 
 	// Active percentage — prefer Fast-Die CE histogram if available.
-	activePct := computeActivePctFromCE(cat.computeEn)
+	activePct := computeActivePctFromCE(cat.ComputeEn)
 	if activePct == 0 {
-		activePct = computeActivePctFromVoltage(cat.voltage)
+		activePct = computeActivePctFromVoltage(cat.Voltage)
 	}
 	fmt.Printf("  ANE Active: %s\n", activeBar(activePct, 30))
 
 	fmt.Printf("  %s  History:    %s%s\n", ansiDim, sparkline(powerHistory), ansiReset)
 
 	// Energy value.
-	for _, ch := range cat.energy {
+	for _, ch := range cat.Energy {
 		if ch.Value > 0 {
 			watts := energyValueToWatts(ch.Value, ch.Unit, interval)
 			fmt.Printf("  %s%-20s%s %s%5d %s%s %s(%.3fW)%s\n",
@@ -202,22 +163,22 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	fmt.Println()
 
 	// Compute utilization histogram.
-	printComputeUtilization(cat.computeEn)
+	printComputeUtilization(cat.ComputeEn)
 
 	// Voltage states.
-	printStateSection("Voltage States", cat.voltage, ansiBlue, ansiGreen)
+	printStateSection("Voltage States", cat.Voltage, ansiBlue, ansiGreen)
 
 	// DCS frequency states.
-	printStateSection("DCS Frequency", cat.dcsFloor, ansiCyan, ansiGreen)
+	printStateSection("DCS Frequency", cat.DCSFloor, ansiCyan, ansiGreen)
 
 	// Bandwidth — compact summary.
-	printBandwidth(cat.bandwidth)
+	printBandwidth(cat.Bandwidth)
 
 	// Throttle.
-	printThrottle(cat.throttle)
+	printThrottle(cat.Throttle)
 
 	// Counters.
-	printCounters(cat.interrupt)
+	printCounters(cat.Interrupt)
 
 	fmt.Printf("\n%sPress Ctrl-C to stop.%s\n", ansiDim, ansiReset)
 }
