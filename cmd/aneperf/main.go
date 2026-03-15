@@ -132,6 +132,9 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 		d.Device.Version, d.Device.MinorVersion,
 		fwIcon,
 		ansiDim, d.Device.PowerState, ansiReset, d.Device.MaxPowerSt)
+
+	// Cluster power state — compact indicator right after device info.
+	printClusterPower(cat.ClusterPower)
 	fmt.Println()
 
 	// Power section.
@@ -181,7 +184,10 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	// Throttle.
 	printThrottle(cat.Throttle, stats.TotalThrottles)
 
-	// Counters.
+	// Throttle detail — SoC Stats residency breakdown.
+	printThrottleDetail(cat.ThrottleDetail)
+
+	// Counters — split into count channels and time channels.
 	printCounters(cat.Interrupt, d.Duration)
 
 	fmt.Printf("\n%sPress Ctrl-C to stop.%s\n", ansiDim, ansiReset)
@@ -402,14 +408,14 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 			if s.name == dominantName {
 				color = dominantColor
 			}
-			fmt.Printf("  %s%s%s %0.f%%", color, s.name, ansiReset, s.pct)
+			fmt.Printf("  %s%s%s %.0f%%", color, s.name, ansiReset, s.pct)
 		}
 		fmt.Println()
 	}
 	fmt.Println()
 }
 
-// printBandwidth prints bandwidth channels with only the top tiers.
+// printBandwidth prints bandwidth channels grouped by SubGroup with headers.
 func printBandwidth(channels []aneperf.Channel) {
 	if len(channels) == 0 {
 		return
@@ -430,42 +436,64 @@ func printBandwidth(channels []aneperf.Channel) {
 		return
 	}
 
-	fmt.Printf("%s╸ Bandwidth%s\n", ansiBold, ansiReset)
+	// Group channels by SubGroup.
+	type subgroupEntry struct {
+		name     string
+		channels []aneperf.Channel
+	}
+	var groups []subgroupEntry
+	seen := map[string]int{}
 	for _, ch := range channels {
-		var total int64
-		for _, s := range ch.States {
-			total += s.Residency
+		idx, ok := seen[ch.SubGroup]
+		if !ok {
+			idx = len(groups)
+			seen[ch.SubGroup] = idx
+			groups = append(groups, subgroupEntry{name: ch.SubGroup})
 		}
-		if total == 0 {
-			continue
-		}
+		groups[idx].channels = append(groups[idx].channels, ch)
+	}
 
-		type sp struct {
-			name string
-			pct  float64
+	fmt.Printf("%s╸ Bandwidth%s\n", ansiBold, ansiReset)
+	for _, g := range groups {
+		if len(groups) > 1 && g.name != "" {
+			fmt.Printf("  %s— %s —%s\n", ansiDim, g.name, ansiReset)
 		}
-		var active []sp
-		for _, s := range ch.States {
-			pct := float64(s.Residency) / float64(total) * 100
-			if pct >= 0.5 {
-				active = append(active, sp{strings.TrimSpace(s.Name), pct})
+		for _, ch := range g.channels {
+			var total int64
+			for _, s := range ch.States {
+				total += s.Residency
 			}
-		}
-		if len(active) == 0 {
-			continue
-		}
+			if total == 0 {
+				continue
+			}
 
-		sort.Slice(active, func(i, j int) bool { return active[i].pct > active[j].pct })
+			type sp struct {
+				name string
+				pct  float64
+			}
+			var active []sp
+			for _, s := range ch.States {
+				pct := float64(s.Residency) / float64(total) * 100
+				if pct >= 0.5 {
+					active = append(active, sp{strings.TrimSpace(s.Name), pct})
+				}
+			}
+			if len(active) == 0 {
+				continue
+			}
 
-		shown := min(len(active), 5)
-		fmt.Printf("  %-22s", ch.Channel)
-		for _, s := range active[:shown] {
-			fmt.Printf("  %s%s%s %0.f%%", ansiCyan, s.name, ansiReset, s.pct)
+			sort.Slice(active, func(i, j int) bool { return active[i].pct > active[j].pct })
+
+			shown := min(len(active), 5)
+			fmt.Printf("  %-22s", ch.Channel)
+			for _, s := range active[:shown] {
+				fmt.Printf("  %s%s%s %.0f%%", ansiCyan, s.name, ansiReset, s.pct)
+			}
+			if len(active) > shown {
+				fmt.Printf("  %s+%d more%s", ansiDim, len(active)-shown, ansiReset)
+			}
+			fmt.Println()
 		}
-		if len(active) > shown {
-			fmt.Printf("  %s+%d more%s", ansiDim, len(active)-shown, ansiReset)
-		}
-		fmt.Println()
 	}
 	fmt.Println()
 }
@@ -492,23 +520,25 @@ func printThrottle(channels []aneperf.Channel, totalThrottles int64) {
 	fmt.Println()
 }
 
-// printCounters prints interrupt/counter channels with rate.
+// printCounters prints interrupt/counter channels with rate, split into count vs time.
 func printCounters(channels []aneperf.Channel, dur time.Duration) {
-	var hasCounters bool
+	var countChs, timeChs []aneperf.Channel
 	for _, ch := range channels {
-		if ch.Value != 0 {
-			hasCounters = true
-			break
+		if ch.Value == 0 {
+			continue
 		}
-	}
-	if !hasCounters {
-		return
+		if strings.Contains(ch.Channel, "(MATUs)") || strings.Contains(ch.Unit, "MATU") {
+			timeChs = append(timeChs, ch)
+		} else {
+			countChs = append(countChs, ch)
+		}
 	}
 
 	durSec := dur.Seconds()
-	fmt.Printf("%s╸ Counters%s %40s %s\n", ansiBold, ansiReset, "count", "/s")
-	for _, ch := range channels {
-		if ch.Value != 0 {
+
+	if len(countChs) > 0 {
+		fmt.Printf("%s╸ Counters%s %40s %s\n", ansiBold, ansiReset, "count", "/s")
+		for _, ch := range countChs {
 			rate := 0.0
 			if durSec > 0 {
 				rate = float64(ch.Value) / durSec
@@ -516,7 +546,127 @@ func printCounters(channels []aneperf.Channel, dur time.Duration) {
 			fmt.Printf("  %50s %s%8d%s %s%6.1f%s\n",
 				ch.Channel, ansiYellow, ch.Value, ansiReset, ansiDim, rate, ansiReset)
 		}
+		fmt.Println()
 	}
+
+	if len(timeChs) > 0 {
+		fmt.Printf("%s╸ Handler Time (MATUs)%s %28s %s\n", ansiBold, ansiReset, "time", "/s")
+		for _, ch := range timeChs {
+			rate := 0.0
+			if durSec > 0 {
+				rate = float64(ch.Value) / durSec
+			}
+			fmt.Printf("  %50s %s%8d%s %s%6.1f%s\n",
+				ch.Channel, ansiDim, ch.Value, ansiReset, ansiDim, rate, ansiReset)
+		}
+		fmt.Println()
+	}
+}
+
+// printClusterPower renders a one-line cluster power state indicator.
+func printClusterPower(channels []aneperf.Channel) {
+	if len(channels) == 0 {
+		return
+	}
+	for _, ch := range channels {
+		if len(ch.States) == 0 {
+			continue
+		}
+		var total int64
+		for _, s := range ch.States {
+			total += s.Residency
+		}
+		if total == 0 {
+			continue
+		}
+		// Show ACT residency.
+		for _, s := range ch.States {
+			if strings.TrimSpace(s.Name) == "ACT" {
+				pct := float64(s.Residency) / float64(total) * 100
+				color := ansiGreen
+				if pct < 50 {
+					color = ansiYellow
+				}
+				fmt.Printf("  %s╸ Cluster Power%s   %s: %s%sACT %.1f%%%s\n",
+					ansiDim, ansiReset, ch.Channel, color, ansiBold, pct, ansiReset)
+			}
+		}
+	}
+}
+
+// printThrottleDetail renders SoC Stats throttle reason residency.
+func printThrottleDetail(channels []aneperf.Channel) {
+	if len(channels) == 0 {
+		return
+	}
+
+	// Check if any throttle reason has ACT > 0.
+	anyActive := false
+	for _, ch := range channels {
+		for _, s := range ch.States {
+			if strings.TrimSpace(s.Name) == "ACT" && s.Residency > 0 {
+				anyActive = true
+				break
+			}
+		}
+		if anyActive {
+			break
+		}
+	}
+
+	fmt.Printf("%s╸ Throttle Detail%s\n", ansiBold, ansiReset)
+	if !anyActive {
+		fmt.Printf("  %sno active throttles%s\n", ansiDim, ansiReset)
+		fmt.Println()
+		return
+	}
+
+	for _, ch := range channels {
+		if len(ch.States) == 0 {
+			continue
+		}
+		var total int64
+		for _, s := range ch.States {
+			total += s.Residency
+		}
+		if total == 0 {
+			continue
+		}
+
+		type sp struct {
+			name string
+			pct  float64
+		}
+		var active []sp
+		for _, s := range ch.States {
+			pct := float64(s.Residency) / float64(total) * 100
+			name := strings.TrimSpace(s.Name)
+			if pct >= 0.5 {
+				active = append(active, sp{name, pct})
+			}
+		}
+		// Show channels where ACT > 0, or all if none active.
+		hasACT := false
+		for _, s := range active {
+			if s.name == "ACT" && s.pct > 0 {
+				hasACT = true
+			}
+		}
+		color := ansiDim
+		if hasACT {
+			color = ansiYellow
+		}
+		fmt.Printf("  %s%-30s%s", color, ch.Channel, ansiReset)
+		for _, s := range active {
+			c := ansiDim
+			if s.name == "ACT" && s.pct > 0 {
+				c = ansiYellow
+			}
+			fmt.Printf("  %s%s%s %.0f%%", c, s.name, ansiReset, s.pct)
+		}
+		fmt.Println()
+	}
+	fmt.Println()
 }
 
 func powerStats(history []float64) (min, avg, max float64) {

@@ -89,13 +89,17 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 const HISTORY_LEN = 60;
 
 function classifyChannels(channels) {
-  const c = { energy: [], voltage: [], dcsFloor: [], computeEn: [], bandwidth: [], throttle: [], interrupt: [] };
+  const c = { energy: [], voltage: [], dcsFloor: [], computeEn: [], bandwidth: [], throttle: [], interrupt: [], throttleDetail: [], clusterPower: [] };
   for (const ch of channels || []) {
     switch (ch.group) {
       case 'Energy Model':
         c.energy.push(ch); break;
       case 'Interrupt Statistics (by index)':
         c.interrupt.push(ch); break;
+      case 'SoC Stats':
+        if (ch.subgroup === 'Events') c.throttleDetail.push(ch);
+        else if (ch.subgroup === 'Cluster Power States') c.clusterPower.push(ch);
+        break;
       default:
         if (!ch.group.startsWith('PMP')) break;
         if (ch.subgroup === 'SOC Floor') c.voltage.push(ch);
@@ -191,12 +195,14 @@ function App() {
 
   return html`
     <${DeviceHeader} dev=${dev} connected=${connected} />
+    <${ClusterPowerSection} channels=${cat.clusterPower} />
     <${PowerSection} powerW=${delta.ane_power_watts} activePct=${activePct} history=${historyRef.current} energy=${cat.energy} durationMs=${durationMs} />
     <${ComputeUtilization} channels=${cat.computeEn} />
     <${StateSection} title="Voltage States" channels=${cat.voltage} />
     <${StateSection} title="DCS Frequency" channels=${cat.dcsFloor} />
     <${BandwidthSection} channels=${cat.bandwidth} />
     <${ThrottleSection} channels=${cat.throttle} durationMs=${durationMs} />
+    <${ThrottleDetailSection} channels=${cat.throttleDetail} />
     <${CounterTable} channels=${cat.interrupt} durationMs=${durationMs} />
     <${Footer} durationMs=${durationMs} channelCount=${(delta.channels || []).length} />
   `;
@@ -242,7 +248,7 @@ function PowerSection({ powerW, activePct, history, energy, durationMs }) {
   return html`
     <div class="section">
       <h2>Power</h2>
-      <div><span class="power-big">${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
+      <div title="ANE power draw in watts, computed from IOReport energy counters divided by sample interval"><span class="power-big">${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
       <div style="margin-top:4px;font-size:11px;color:var(--dim)">min ${ps.min.toFixed(3)}W · avg ${ps.avg.toFixed(3)}W · max ${ps.max.toFixed(3)}W</div>
       ${efficiency !== null ? html`<div style="font-size:11px;color:var(--dim)">efficiency: ${efficiency.toFixed(4)} W/%active</div>` : null}
       <div style="margin-top:8px;font-size:12px;color:var(--dim)">ANE Active</div>
@@ -310,7 +316,7 @@ function ComputeUtilization({ channels }) {
   if (items.length === 0) return null;
   return html`
     <div class="section">
-      <h2>Compute Utilization</h2>
+      <h2 title="Fast-Die CE histogram showing ANE compute utilization distribution. Each bucket shows residency at that utilization level. Weighted average gives overall utilization.">Compute Utilization</h2>
       ${items.map(item => html`
         <div style="color:var(--dim);font-size:11px;margin-bottom:4px">${item.channel}</div>
         <div style="font-size:11px;color:var(--dim);margin-bottom:6px">Peak: ${item.peakName} (${item.peakPct.toFixed(1)}%) · Weighted avg: ${item.weightedAvg.toFixed(1)}%</div>
@@ -328,6 +334,11 @@ function ComputeUtilization({ channels }) {
   `;
 }
 
+const sectionTooltips = {
+  'Voltage States': 'SOC Floor voltage rail residency. VMIN=idle/lowest voltage, VNOM=nominal, VMAX=maximum performance. Non-VMIN residency indicates active ANE compute.',
+  'DCS Frequency': 'DCS frequency states. Higher states indicate more ANE memory bandwidth demand.',
+};
+
 function StateSection({ title, channels }) {
   if (!channels || channels.length === 0) return null;
   let hasActivity = false;
@@ -339,7 +350,7 @@ function StateSection({ title, channels }) {
   if (!hasActivity) return null;
 
   return html`
-    <div class="section">
+    <div class="section" title="${sectionTooltips[title] || ''}">
       <h2>${title}</h2>
       ${channels.map(ch => {
         let total = 0;
@@ -376,29 +387,44 @@ function BandwidthSection({ channels }) {
   }
   if (!hasActivity) return null;
 
+  // Group by subgroup.
+  const groups = [];
+  const seen = {};
+  for (const ch of channels) {
+    const sg = ch.subgroup || '';
+    if (!(sg in seen)) { seen[sg] = groups.length; groups.push({ name: sg, channels: [] }); }
+    groups[seen[sg]].channels.push(ch);
+  }
+
   return html`
-    <div class="section">
+    <div class="section" title="Bandwidth shows ANE memory bus utilization across AF, DCS, and SOC-NI subsystems. RD=read, WR=write, RD+WR=combined.">
       <h2>Bandwidth</h2>
-      ${channels.map(ch => {
-        let total = 0;
-        for (const s of (ch.states || [])) total += s.residency_ns;
-        if (total === 0) return null;
-        const active = (ch.states || [])
-          .map(s => ({ name: s.name.trim(), pct: s.residency_ns / total * 100 }))
-          .filter(s => s.pct >= 0.5)
-          .sort((a, b) => b.pct - a.pct)
-          .slice(0, 5);
-        if (active.length === 0) return null;
-        // Find lowest tier — if it dominates (>90%), label as idle.
-        const lowestTier = active[active.length - 1];
-        const isIdle = active.length === 1 && lowestTier.pct > 90;
-        return html`
-          <div class="bw-row">
-            <span class="bw-name">${ch.channel}${isIdle ? html` <span style="color:var(--dim);font-size:10px">(idle)</span>` : ''}</span>
-            ${active.map(s => html`<span class="bw-chip">${s.name}</span> <span class="bw-pct">${Math.round(s.pct)}%</span> `)}
-          </div>
-        `;
-      })}
+      ${groups.map(g => html`
+        ${groups.length > 1 && g.name ? html`<div style="font-size:11px;color:var(--dim);margin:6px 0 2px;border-bottom:1px solid var(--border);padding-bottom:2px">${g.name}</div>` : null}
+        ${g.channels.map(ch => {
+          let total = 0;
+          for (const s of (ch.states || [])) total += s.residency_ns;
+          if (total === 0) return null;
+          const active = (ch.states || [])
+            .map(s => ({ name: s.name.trim(), pct: s.residency_ns / total * 100 }))
+            .filter(s => s.pct >= 0.5)
+            .sort((a, b) => b.pct - a.pct)
+            .slice(0, 5);
+          if (active.length === 0) return null;
+          const lowestTier = active[active.length - 1];
+          const isIdle = active.length === 1 && lowestTier.pct > 90;
+          // Highlight RD/WR/RD+WR direction in channel name.
+          const dirMatch = ch.channel.match(/(RD\+WR|RD|WR)$/);
+          const dirLabel = dirMatch ? dirMatch[1] : '';
+          const dirColor = dirLabel === 'RD' ? 'var(--cyan)' : dirLabel === 'WR' ? 'var(--orange)' : dirLabel === 'RD+WR' ? 'var(--blue)' : '';
+          return html`
+            <div class="bw-row">
+              <span class="bw-name">${ch.channel}${dirLabel ? html` <span style="color:${dirColor};font-size:10px;font-weight:600">${dirLabel}</span>` : ''}${isIdle ? html` <span style="color:var(--dim);font-size:10px">(idle)</span>` : ''}</span>
+              ${active.map(s => html`<span class="bw-chip">${s.name}</span> <span class="bw-pct">${Math.round(s.pct)}%</span> `)}
+            </div>
+          `;
+        })}
+      `)}
     </div>
   `;
 }
@@ -412,7 +438,7 @@ function ThrottleSection({ channels, durationMs }) {
   const durSec = (durationMs || 1000) / 1000;
   const rate = durSec > 0 ? totalThrottles / durSec : 0;
   return html`
-    <div class="section">
+    <div class="section" title="PWRS0 throttle event counters. Each event represents a power management throttle applied to the ANE during the sample interval.">
       <h2 class="throttle-alert">Throttle</h2>
       <div style="font-size:11px;color:var(--dim);margin-bottom:6px">Total: ${totalThrottles} events (${rate.toFixed(1)}/s)</div>
       ${active.map(ch => html`
@@ -425,24 +451,109 @@ function ThrottleSection({ channels, durationMs }) {
   `;
 }
 
+function ClusterPowerSection({ channels }) {
+  if (!channels || channels.length === 0) return null;
+  const items = [];
+  for (const ch of channels) {
+    if (!ch.states || ch.states.length === 0) continue;
+    let total = 0, actRes = 0;
+    for (const s of ch.states) {
+      total += s.residency_ns;
+      if (s.name.trim() === 'ACT') actRes = s.residency_ns;
+    }
+    if (total > 0) items.push({ name: ch.channel, actPct: actRes / total * 100 });
+  }
+  if (items.length === 0) return null;
+  return html`
+    <div class="section" title="Cluster Power States show whether the ANE cluster is in an active (ACT) or inactive (INACT) power state. High ACT % means the ANE hardware is powered on and available.">
+      <h2>Cluster Power</h2>
+      ${items.map(item => html`
+        <div style="margin:4px 0">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px">
+            <span>${item.name}</span>
+            <span style="color:${item.actPct > 50 ? 'var(--green)' : 'var(--yellow)'};font-weight:600">ACT ${item.actPct.toFixed(1)}%</span>
+          </div>
+          <div class="bar-outer">
+            <div class="bar-inner" style="width:${Math.min(item.actPct, 100)}%;background:${item.actPct > 50 ? 'var(--green)' : 'var(--yellow)'};opacity:0.6"></div>
+          </div>
+        </div>
+      `)}
+    </div>
+  `;
+}
+
+function ThrottleDetailSection({ channels }) {
+  if (!channels || channels.length === 0) return null;
+  const items = [];
+  let anyActive = false;
+  for (const ch of channels) {
+    if (!ch.states || ch.states.length === 0) continue;
+    let total = 0, actRes = 0;
+    for (const s of ch.states) {
+      total += s.residency_ns;
+      if (s.name.trim() === 'ACT') actRes = s.residency_ns;
+    }
+    if (total > 0) {
+      const actPct = actRes / total * 100;
+      items.push({ name: ch.channel, actPct });
+      if (actPct > 0) anyActive = true;
+    }
+  }
+  if (items.length === 0) return null;
+  return html`
+    <div class="section" title="Throttle Detail shows which throttling triggers are active. ACT > 0% means the ANE is being throttled for that reason. Known triggers include PPT, ADCLK, DITHR, and EXT.">
+      <h2 style="color:${anyActive ? 'var(--orange)' : 'var(--dim)'}">Throttle Detail</h2>
+      ${!anyActive
+        ? html`<div style="font-size:12px;color:var(--dim)">No active throttles</div>`
+        : items.map(item => html`
+          <div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;${item.actPct > 0 ? 'color:var(--orange)' : 'color:var(--dim)'}">
+            <span>${item.name}</span>
+            <span>${item.actPct > 0 ? html`<span style="font-weight:600">ACT ${item.actPct.toFixed(1)}%</span>` : 'INACT 100%'}</span>
+          </div>
+        `)
+      }
+    </div>
+  `;
+}
+
 function CounterTable({ channels, durationMs }) {
   if (!channels || channels.length === 0) return null;
   const active = channels.filter(ch => ch.value !== 0);
   if (active.length === 0) return null;
   const durSec = (durationMs || 1000) / 1000;
+
+  const countChs = active.filter(ch => !ch.channel.includes('(MATUs)') && !(ch.unit && ch.unit.includes('MATU')));
+  const timeChs = active.filter(ch => ch.channel.includes('(MATUs)') || (ch.unit && ch.unit.includes('MATU')));
+
   return html`
-    <div class="section">
-      <h2>Counters</h2>
-      <table class="counter-table">
-        <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">count</td><td style="color:var(--dim)">/s</td></tr></thead>
-        <tbody>
-          ${active.map(ch => {
-            const rate = durSec > 0 ? ch.value / durSec : 0;
-            return html`<tr><td>${ch.channel}</td><td>${ch.value}</td><td style="color:var(--dim)">${rate.toFixed(1)}</td></tr>`;
-          })}
-        </tbody>
-      </table>
-    </div>
+    ${countChs.length > 0 ? html`
+      <div class="section" title="Counters show interrupt and handler invocation counts. Handler Count = number of times the ANE interrupt handler ran. Rate (/s) shows frequency.">
+        <h2>Counters</h2>
+        <table class="counter-table">
+          <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">count</td><td style="color:var(--dim)">/s</td></tr></thead>
+          <tbody>
+            ${countChs.map(ch => {
+              const rate = durSec > 0 ? ch.value / durSec : 0;
+              return html`<tr><td>${ch.channel}</td><td>${ch.value}</td><td style="color:var(--dim)">${rate.toFixed(1)}</td></tr>`;
+            })}
+          </tbody>
+        </table>
+      </div>
+    ` : null}
+    ${timeChs.length > 0 ? html`
+      <div class="section" title="Handler Time shows cumulative time spent in interrupt handlers, measured in Mach absolute time units. High values indicate frequent or long-running interrupt handling.">
+        <h2 style="color:var(--dim)">Handler Time (MATUs)</h2>
+        <table class="counter-table">
+          <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">time</td><td style="color:var(--dim)">/s</td></tr></thead>
+          <tbody>
+            ${timeChs.map(ch => {
+              const rate = durSec > 0 ? ch.value / durSec : 0;
+              return html`<tr style="color:var(--dim)"><td>${ch.channel}</td><td>${ch.value}</td><td>${rate.toFixed(1)}</td></tr>`;
+            })}
+          </tbody>
+        </table>
+      </div>
+    ` : null}
   `;
 }
 

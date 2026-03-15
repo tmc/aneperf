@@ -12,6 +12,8 @@ type DeltaStats struct {
 	TotalInterrupts int64
 	InterruptRate   float64 // interrupts/sec (using Delta.Duration)
 	TotalThrottles  int64
+	ClusterActivePct float64            // first PACC*_ANE channel ACT / (ACT+INACT) * 100
+	ThrottleReasons  map[string]float64 // throttle name → ACT residency %
 }
 
 // ComputeStats derives summary metrics from a Delta.
@@ -45,6 +47,12 @@ func ComputeStats(d Delta) DeltaStats {
 			s.TotalThrottles += ch.Value
 		}
 	}
+
+	// Cluster power — compute ACT residency from PACC*_ANE channels.
+	s.ClusterActivePct = computeClusterActivePct(cat.ClusterPower)
+
+	// Throttle detail — compute ACT residency % per throttle reason.
+	s.ThrottleReasons = computeThrottleReasons(cat.ThrottleDetail)
 
 	return s
 }
@@ -122,6 +130,50 @@ func peakCEBucket(channels []Channel) (string, float64) {
 		return peakName, peakPct
 	}
 	return "", 0
+}
+
+// computeClusterActivePct returns the ACT residency percentage across cluster power channels.
+func computeClusterActivePct(channels []Channel) float64 {
+	for _, ch := range channels {
+		if len(ch.States) == 0 {
+			continue
+		}
+		var actRes, total int64
+		for _, s := range ch.States {
+			total += s.Residency
+			if strings.TrimSpace(s.Name) == "ACT" {
+				actRes = s.Residency
+			}
+		}
+		if total > 0 {
+			return float64(actRes) / float64(total) * 100
+		}
+	}
+	return 0
+}
+
+// computeThrottleReasons returns per-throttle ACT residency percentages.
+func computeThrottleReasons(channels []Channel) map[string]float64 {
+	if len(channels) == 0 {
+		return nil
+	}
+	reasons := make(map[string]float64, len(channels))
+	for _, ch := range channels {
+		if len(ch.States) == 0 {
+			continue
+		}
+		var actRes, total int64
+		for _, s := range ch.States {
+			total += s.Residency
+			if strings.TrimSpace(s.Name) == "ACT" {
+				actRes = s.Residency
+			}
+		}
+		if total > 0 {
+			reasons[ch.Channel] = float64(actRes) / float64(total) * 100
+		}
+	}
+	return reasons
 }
 
 // parseFloat parses a simple non-negative float from a string.

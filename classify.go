@@ -8,13 +8,15 @@ import (
 
 // ChannelsByCategory groups ANE channels by their IOReport category.
 type ChannelsByCategory struct {
-	Energy    []Channel // Energy Model
-	Voltage   []Channel // SOC Floor (VMIN/VNOM/VMAX)
-	DCSFloor  []Channel // DCS Floor (F1-F6)
-	ComputeEn []Channel // Fast-Die CE (0%-100%)
-	Bandwidth []Channel // AF BW + DCS BW + SOC-NI Util BW
-	Throttle  []Channel // PWRS0 throttle counters
-	Interrupt []Channel // Interrupt Statistics
+	Energy         []Channel // Energy Model
+	Voltage        []Channel // SOC Floor (VMIN/VNOM/VMAX)
+	DCSFloor       []Channel // DCS Floor (F1-F6)
+	ComputeEn      []Channel // Fast-Die CE (0%-100%)
+	Bandwidth      []Channel // AF BW + DCS BW + SOC-NI Util BW
+	Throttle       []Channel // PWRS0 throttle counters
+	Interrupt      []Channel // Interrupt Statistics
+	ThrottleDetail []Channel // SoC Stats → Events (ANE_THROTTLE_* INACT/ACT)
+	ClusterPower   []Channel // SoC Stats → Cluster Power States (PACC*_ANE)
 }
 
 // ClassifyChannels splits channels into categories by group and subgroup.
@@ -26,6 +28,13 @@ func ClassifyChannels(channels []Channel) ChannelsByCategory {
 			c.Energy = append(c.Energy, ch)
 		case "Interrupt Statistics (by index)":
 			c.Interrupt = append(c.Interrupt, ch)
+		case "SoC Stats":
+			switch ch.SubGroup {
+			case "Events":
+				c.ThrottleDetail = append(c.ThrottleDetail, ch)
+			case "Cluster Power States":
+				c.ClusterPower = append(c.ClusterPower, ch)
+			}
 		default:
 			if !strings.HasPrefix(ch.Group, "PMP") {
 				break

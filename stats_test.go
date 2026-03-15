@@ -7,14 +7,17 @@ import (
 
 func TestComputeStats(t *testing.T) {
 	tests := []struct {
-		name            string
-		delta           Delta
-		wantActivePct   float64
-		wantPeakBucket  string
-		wantPeakPct     float64
-		wantInterrupts  int64
-		wantRatePositve bool
-		wantThrottles   int64
+		name               string
+		delta              Delta
+		wantActivePct      float64
+		wantPeakBucket     string
+		wantPeakPct        float64
+		wantInterrupts     int64
+		wantRatePositve    bool
+		wantThrottles      int64
+		checkClusterActive bool
+		wantClusterActive  float64
+		wantThrottleReason map[string]float64
 	}{
 		{
 			name: "ce histogram idle",
@@ -78,6 +81,67 @@ func TestComputeStats(t *testing.T) {
 			wantThrottles:   3,
 		},
 		{
+			name: "cluster power active",
+			delta: Delta{
+				Duration: time.Second,
+				Channels: []Channel{
+					{Group: "SoC Stats", SubGroup: "Cluster Power States", Channel: "PACC1_ANE", States: []StateEntry{
+						{Name: "ACT", Residency: 800},
+						{Name: "INACT", Residency: 200},
+					}},
+				},
+			},
+			checkClusterActive: true,
+			wantClusterActive:  80,
+		},
+		{
+			name: "throttle detail reasons",
+			delta: Delta{
+				Duration: time.Second,
+				Channels: []Channel{
+					{Group: "SoC Stats", SubGroup: "Events", Channel: "ANE_THROTTLE_PPT_TRIG", States: []StateEntry{
+						{Name: "ACT", Residency: 32},
+						{Name: "INACT", Residency: 968},
+					}},
+					{Group: "SoC Stats", SubGroup: "Events", Channel: "ANE_THROTTLE_ADCLK_TRIG", States: []StateEntry{
+						{Name: "ACT", Residency: 0},
+						{Name: "INACT", Residency: 1000},
+					}},
+				},
+			},
+			wantThrottleReason: map[string]float64{
+				"ANE_THROTTLE_PPT_TRIG":   3.2,
+				"ANE_THROTTLE_ADCLK_TRIG": 0,
+			},
+		},
+		{
+			name: "cluster power zero residency",
+			delta: Delta{
+				Duration: time.Second,
+				Channels: []Channel{
+					{Group: "SoC Stats", SubGroup: "Cluster Power States", Channel: "PACC1_ANE", States: []StateEntry{
+						{Name: "ACT", Residency: 0},
+						{Name: "INACT", Residency: 1000},
+					}},
+				},
+			},
+			checkClusterActive: true,
+			wantClusterActive:  0,
+		},
+		{
+			name: "cluster power no ACT state",
+			delta: Delta{
+				Duration: time.Second,
+				Channels: []Channel{
+					{Group: "SoC Stats", SubGroup: "Cluster Power States", Channel: "PACC1_ANE", States: []StateEntry{
+						{Name: "INACT", Residency: 1000},
+					}},
+				},
+			},
+			checkClusterActive: true,
+			wantClusterActive:  0,
+		},
+		{
 			name:  "empty channels",
 			delta: Delta{Duration: time.Second},
 		},
@@ -102,6 +166,19 @@ func TestComputeStats(t *testing.T) {
 			}
 			if got.TotalThrottles != tt.wantThrottles {
 				t.Errorf("TotalThrottles = %v, want %v", got.TotalThrottles, tt.wantThrottles)
+			}
+			if tt.checkClusterActive && got.ClusterActivePct != tt.wantClusterActive {
+				t.Errorf("ClusterActivePct = %v, want %v", got.ClusterActivePct, tt.wantClusterActive)
+			}
+			if tt.wantThrottleReason != nil {
+				for name, wantPct := range tt.wantThrottleReason {
+					gotPct, ok := got.ThrottleReasons[name]
+					if !ok {
+						t.Errorf("ThrottleReasons missing %q", name)
+					} else if diff := gotPct - wantPct; diff > 0.01 || diff < -0.01 {
+						t.Errorf("ThrottleReasons[%q] = %v, want %v", name, gotPct, wantPct)
+					}
+				}
 			}
 		})
 	}
