@@ -182,7 +182,60 @@ func BenchmarkConvDetailedMetrics(b *testing.B) {
 
 	b.ReportMetric(float64(n), "evals")
 	b.ReportMetric(float64(n)/delta.Duration.Seconds(), "evals/s")
-	delta.ReportMetrics(b)
+	delta.ReportMetrics(b, aneperf.MetricAll)
+}
+
+// BenchmarkConvMinimalMetrics demonstrates selective metric reporting,
+// emitting only power and compute utilization.
+func BenchmarkConvMinimalMetrics(b *testing.B) {
+	if os.Getenv("ANE_BENCH") != "1" {
+		b.Skip("set ANE_BENCH=1 to run ANE workload benchmarks")
+	}
+
+	c, err := ane.Open()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer c.Close()
+
+	m, err := OpenConv(c, 64, 64)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer m.Close()
+
+	sampler, err := aneperf.NewSampler()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer sampler.Close()
+
+	input := make([]float32, 64)
+	for i := range input {
+		input[i] = float32(i) / 64
+	}
+	if err := m.WriteInputF32(0, input); err != nil {
+		b.Fatal(err)
+	}
+
+	// Warmup.
+	for range 10 {
+		m.Eval()
+	}
+
+	snap := sampler.Start()
+	deadline := time.Now().Add(time.Second)
+	n := 0
+	for time.Now().Before(deadline) {
+		if err := m.Eval(); err != nil {
+			b.Fatal(err)
+		}
+		n++
+	}
+	delta := sampler.Stop(snap)
+
+	b.ReportMetric(float64(n), "evals")
+	delta.ReportMetrics(b, aneperf.MetricPower|aneperf.MetricCompute)
 }
 
 func BenchmarkConvBurstWithANEPerf(b *testing.B) {

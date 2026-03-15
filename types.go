@@ -46,33 +46,73 @@ type Delta struct {
 	Channels []Channel     `json:"channels,omitempty"`
 }
 
+// Metric selects which categories of metrics ReportMetrics emits.
+// Combine with bitwise OR to select multiple categories.
+type Metric int
+
+const (
+	MetricPower     Metric = 1 << iota // ane-watts
+	MetricEnergy                       // ane-energy-{unit}/op
+	MetricCompute                      // ane-compute-%
+	MetricVoltage                      // {channel}-active-%
+	MetricCluster                      // ane-cluster-active-%
+	MetricThrottle                     // ane-throttle-* (events + detail)
+	MetricInterrupt                    // ane-interrupts/op, handler counts
+	MetricDuration                     // sample-ns/op
+
+	// MetricDefault includes the most commonly useful categories:
+	// power, energy, compute utilization, and sample duration.
+	MetricDefault = MetricPower | MetricEnergy | MetricCompute | MetricDuration
+
+	MetricAll = MetricPower | MetricEnergy | MetricCompute |
+		MetricVoltage | MetricCluster | MetricThrottle |
+		MetricInterrupt | MetricDuration
+)
+
+func (m Metric) has(flag Metric) bool { return m&flag != 0 }
+
 // ReportMetrics reports delta metrics to a testing.B-compatible reporter.
 //
+// The optional metrics arguments select which categories to report.
+// If none are provided, all metrics are reported (MetricAll).
+//
 // Reported metrics:
-//   - ane-watts: ANE power consumption
-//   - ane-energy-{unit}/op: total ANE energy (mJ, uJ, or nJ)
-//   - {channel}-active-%: percentage of time not at VMIN (per voltage channel)
-//   - ane-compute-%: weighted CE utilization (Fast-Die CE histogram)
-//   - ane-cluster-active-%: ANE cluster power-on residency
-//   - ane-throttle-{reason}-act-%: per-reason throttle ACT residency (only if >0)
-//   - ane-interrupts/op: total interrupt handler count
-//   - ane-throttle-events/op: throttle event count (only if >0)
-//   - sample-ns/op: measurement duration
-func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }) {
-	b.ReportMetric(d.PowerW, "ane-watts")
-	b.ReportMetric(float64(d.Duration.Nanoseconds()), "sample-ns/op")
+//   - ane-watts: ANE power consumption (MetricPower)
+//   - sample-ns/op: measurement duration (MetricDuration)
+//   - ane-energy-{unit}/op: total ANE energy (MetricEnergy)
+//   - {channel}-active-%: percentage of time not at VMIN (MetricVoltage)
+//   - ane-throttle-events/op: throttle event count (MetricThrottle)
+//   - ane-interrupts/op: total interrupt handler count (MetricInterrupt)
+//   - ane-compute-%: weighted CE utilization (MetricCompute)
+//   - ane-cluster-active-%: ANE cluster power-on residency (MetricCluster)
+//   - ane-throttle-{reason}-act-%: per-reason throttle ACT residency (MetricThrottle)
+func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }, metrics ...Metric) {
+	mask := MetricAll
+	if len(metrics) > 0 {
+		mask = 0
+		for _, m := range metrics {
+			mask |= m
+		}
+	}
+
+	if mask.has(MetricPower) {
+		b.ReportMetric(d.PowerW, "ane-watts")
+	}
+	if mask.has(MetricDuration) {
+		b.ReportMetric(float64(d.Duration.Nanoseconds()), "sample-ns/op")
+	}
 
 	for _, ch := range d.Channels {
 		switch ch.Group {
 		case "Energy Model":
-			if ch.Value != 0 {
+			if mask.has(MetricEnergy) && ch.Value != 0 {
 				b.ReportMetric(float64(ch.Value), "ane-energy-"+ch.Unit+"/op")
 			}
 		default:
 			if !strings.HasPrefix(ch.Group, "PMP") {
 				break
 			}
-			if ch.SubGroup == "SOC Floor" && len(ch.States) > 0 {
+			if mask.has(MetricVoltage) && ch.SubGroup == "SOC Floor" && len(ch.States) > 0 {
 				// Report active percentage for voltage state channels.
 				var total, vminRes int64
 				for _, s := range ch.States {
@@ -94,11 +134,11 @@ func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }) {
 				}
 			}
 			// Report throttle events.
-			if ch.Value > 0 && containsANE(ch.Channel) {
+			if mask.has(MetricThrottle) && ch.Value > 0 && containsANE(ch.Channel) {
 				b.ReportMetric(float64(ch.Value), "ane-throttle-events/op")
 			}
 		case "Interrupt Statistics (by index)":
-			if ch.Value > 0 && (containsANE(ch.Channel) || len(ch.Channel) > 20) {
+			if mask.has(MetricInterrupt) && ch.Value > 0 && (containsANE(ch.Channel) || len(ch.Channel) > 20) {
 				name := sanitizeMetricName(ch.Channel)
 				b.ReportMetric(float64(ch.Value), name+"/op")
 			}
@@ -106,29 +146,35 @@ func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }) {
 	}
 
 	// Report interrupt totals.
-	var totalInterrupts int64
-	for _, ch := range d.Channels {
-		if ch.Group == "Interrupt Statistics (by index)" && ch.Value > 0 {
-			if len(ch.Channel) > 10 && ch.Channel[len(ch.Channel)-5:] == "Count" {
-				totalInterrupts += ch.Value
+	if mask.has(MetricInterrupt) {
+		var totalInterrupts int64
+		for _, ch := range d.Channels {
+			if ch.Group == "Interrupt Statistics (by index)" && ch.Value > 0 {
+				if len(ch.Channel) > 10 && ch.Channel[len(ch.Channel)-5:] == "Count" {
+					totalInterrupts += ch.Value
+				}
 			}
 		}
-	}
-	if totalInterrupts > 0 {
-		b.ReportMetric(float64(totalInterrupts), "ane-interrupts/op")
+		if totalInterrupts > 0 {
+			b.ReportMetric(float64(totalInterrupts), "ane-interrupts/op")
+		}
 	}
 
 	// Report derived stats from newly classified channels.
-	stats := ComputeStats(d)
-	if stats.ActivePct > 0 {
-		b.ReportMetric(stats.ActivePct, "ane-compute-%")
-	}
-	if stats.ClusterActivePct > 0 {
-		b.ReportMetric(stats.ClusterActivePct, "ane-cluster-active-%")
-	}
-	for reason, actPct := range stats.ThrottleReasons {
-		if actPct > 0 {
-			b.ReportMetric(actPct, "ane-throttle-"+sanitizeMetricName(reason)+"-act-%")
+	if mask.has(MetricCompute) || mask.has(MetricCluster) || mask.has(MetricThrottle) {
+		stats := ComputeStats(d)
+		if mask.has(MetricCompute) && stats.ActivePct > 0 {
+			b.ReportMetric(stats.ActivePct, "ane-compute-%")
+		}
+		if mask.has(MetricCluster) && stats.ClusterActivePct > 0 {
+			b.ReportMetric(stats.ClusterActivePct, "ane-cluster-active-%")
+		}
+		if mask.has(MetricThrottle) {
+			for reason, actPct := range stats.ThrottleReasons {
+				if actPct > 0 {
+					b.ReportMetric(actPct, "ane-throttle-"+sanitizeMetricName(reason)+"-act-%")
+				}
+			}
 		}
 	}
 }

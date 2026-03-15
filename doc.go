@@ -35,6 +35,10 @@
 //		}
 //	}
 //
+// Pass [Metric] flags to select specific categories:
+//
+//	delta.ReportMetrics(b, aneperf.MetricPower|aneperf.MetricCompute)
+//
 // # Device Info
 //
 // Read ANE hardware properties directly:
