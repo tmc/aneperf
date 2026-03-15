@@ -117,8 +117,8 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	cat := aneperf.ClassifyChannels(d.Channels)
 
 	// Header.
-	fmt.Printf("%s aneperf %s%s— %s  (every %s)%s\n",
-		ansiCyanBold, ansiReset, ansiDim, time.Now().Format("15:04:05"), interval, ansiReset)
+	fmt.Printf("%s aneperf %s%s— %s  (every %s, measured %.3fs)%s\n",
+		ansiCyanBold, ansiReset, ansiDim, time.Now().Format("15:04:05"), interval, d.Duration.Seconds(), ansiReset)
 	fmt.Printf("%s%s%s\n", ansiDim, strings.Repeat("━", 58), ansiReset)
 
 	// Device info.
@@ -126,16 +126,19 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	if d.Device.FirmwareOK {
 		fwIcon = ansiGreen + "✓" + ansiReset
 	}
-	fmt.Printf("  %s%s%s  %s%d cores%s  fw:%s  pwr:%s%d%s/%d\n",
+	fmt.Printf("  %s%s%s  %s%d cores%s  v%d.%d  fw:%s  pwr:%s%d%s/%d\n",
 		ansiBold, d.Device.Architecture, ansiReset,
 		ansiWhite, d.Device.NumCores, ansiReset,
+		d.Device.Version, d.Device.MinorVersion,
 		fwIcon,
 		ansiDim, d.Device.PowerState, ansiReset, d.Device.MaxPowerSt)
 	fmt.Println()
 
 	// Power section.
+	pMin, pAvg, pMax := powerStats(powerHistory)
 	fmt.Printf("%s╸ Power%s\n", ansiBold, ansiReset)
-	fmt.Printf("  ANE Power:  %s%.3f W%s\n", ansiGreenBld, d.PowerW, ansiReset)
+	fmt.Printf("  ANE Power:  %s%.3f W%s    %smin %.3f  avg %.3f  max %.3f%s\n",
+		ansiGreenBld, d.PowerW, ansiReset, ansiDim, pMin, pAvg, pMax, ansiReset)
 
 	// Active percentage — prefer Fast-Die CE histogram if available.
 	activePct := computeActivePctFromCE(cat.ComputeEn)
@@ -163,7 +166,8 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	fmt.Println()
 
 	// Compute utilization histogram.
-	printComputeUtilization(cat.ComputeEn)
+	stats := aneperf.ComputeStats(d)
+	printComputeUtilization(cat.ComputeEn, stats)
 
 	// Voltage states.
 	printStateSection("Voltage States", cat.Voltage, ansiBlue, ansiGreen)
@@ -175,10 +179,10 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	printBandwidth(cat.Bandwidth)
 
 	// Throttle.
-	printThrottle(cat.Throttle)
+	printThrottle(cat.Throttle, stats.TotalThrottles)
 
 	// Counters.
-	printCounters(cat.Interrupt)
+	printCounters(cat.Interrupt, d.Duration)
 
 	fmt.Printf("\n%sPress Ctrl-C to stop.%s\n", ansiDim, ansiReset)
 }
@@ -297,7 +301,7 @@ func sparkline(data []float64) string {
 }
 
 // printComputeUtilization renders the Fast-Die CE histogram as a compact bar.
-func printComputeUtilization(channels []aneperf.Channel) {
+func printComputeUtilization(channels []aneperf.Channel, stats aneperf.DeltaStats) {
 	for _, ch := range channels {
 		if len(ch.States) == 0 {
 			continue
@@ -310,7 +314,11 @@ func printComputeUtilization(channels []aneperf.Channel) {
 			continue
 		}
 
-		fmt.Printf("%s╸ Compute Utilization%s %s(%s)%s\n", ansiBold, ansiReset, ansiDim, ch.Channel, ansiReset)
+		peakInfo := ""
+		if stats.PeakCEBucket != "" {
+			peakInfo = fmt.Sprintf("  peak:%s  avg:%.1f%%", stats.PeakCEBucket, stats.ActivePct)
+		}
+		fmt.Printf("%s╸ Compute Utilization%s %s(%s)%s%s\n", ansiBold, ansiReset, ansiDim, ch.Channel, peakInfo, ansiReset)
 
 		// Show histogram of percentage buckets.
 		maxRes := int64(0)
@@ -463,7 +471,7 @@ func printBandwidth(channels []aneperf.Channel) {
 }
 
 // printThrottle prints throttle event counters.
-func printThrottle(channels []aneperf.Channel) {
+func printThrottle(channels []aneperf.Channel, totalThrottles int64) {
 	var hasThrottle bool
 	for _, ch := range channels {
 		if ch.Value > 0 {
@@ -475,7 +483,7 @@ func printThrottle(channels []aneperf.Channel) {
 		return
 	}
 
-	fmt.Printf("%s╸ Throttle%s\n", ansiBold, ansiReset)
+	fmt.Printf("%s╸ Throttle%s %s%d total%s\n", ansiBold, ansiReset, ansiDim, totalThrottles, ansiReset)
 	for _, ch := range channels {
 		if ch.Value > 0 {
 			fmt.Printf("  %-40s %s%d%s %s\n", ch.Channel, ansiYellow, ch.Value, ansiReset, ch.Unit)
@@ -484,8 +492,8 @@ func printThrottle(channels []aneperf.Channel) {
 	fmt.Println()
 }
 
-// printCounters prints interrupt/counter channels.
-func printCounters(channels []aneperf.Channel) {
+// printCounters prints interrupt/counter channels with rate.
+func printCounters(channels []aneperf.Channel, dur time.Duration) {
 	var hasCounters bool
 	for _, ch := range channels {
 		if ch.Value != 0 {
@@ -497,10 +505,36 @@ func printCounters(channels []aneperf.Channel) {
 		return
 	}
 
-	fmt.Printf("%s╸ Counters%s\n", ansiBold, ansiReset)
+	durSec := dur.Seconds()
+	fmt.Printf("%s╸ Counters%s %40s %s\n", ansiBold, ansiReset, "count", "/s")
 	for _, ch := range channels {
 		if ch.Value != 0 {
-			fmt.Printf("  %50s %s%d%s\n", ch.Channel, ansiYellow, ch.Value, ansiReset)
+			rate := 0.0
+			if durSec > 0 {
+				rate = float64(ch.Value) / durSec
+			}
+			fmt.Printf("  %50s %s%8d%s %s%6.1f%s\n",
+				ch.Channel, ansiYellow, ch.Value, ansiReset, ansiDim, rate, ansiReset)
 		}
 	}
+}
+
+func powerStats(history []float64) (min, avg, max float64) {
+	if len(history) == 0 {
+		return 0, 0, 0
+	}
+	min = history[0]
+	max = history[0]
+	sum := 0.0
+	for _, v := range history {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+		sum += v
+	}
+	avg = sum / float64(len(history))
+	return min, avg, max
 }

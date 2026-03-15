@@ -195,8 +195,9 @@ function App() {
     <${StateSection} title="Voltage States" channels=${cat.voltage} />
     <${StateSection} title="DCS Frequency" channels=${cat.dcsFloor} />
     <${BandwidthSection} channels=${cat.bandwidth} />
-    <${ThrottleSection} channels=${cat.throttle} />
-    <${CounterTable} channels=${cat.interrupt} />
+    <${ThrottleSection} channels=${cat.throttle} durationMs=${durationMs} />
+    <${CounterTable} channels=${cat.interrupt} durationMs=${durationMs} />
+    <${Footer} durationMs=${durationMs} channelCount=${(delta.channels || []).length} />
   `;
 }
 
@@ -213,24 +214,43 @@ function DeviceHeader({ dev, connected }) {
     <div class="device">
       <span class="arch">${dev.architecture || '—'}</span>
       <span>${dev.num_cores || 0} cores</span>
+      <span>v${dev.version || 0}.${dev.minor_version || 0}</span>
+      <span>board:${dev.board_type || 0}</span>
       <span>fw:<span class="${fwClass}">${fwText}</span></span>
       <span>pwr:${dev.power_state || 0}/${dev.max_power_state || 0}</span>
     </div>
   `;
 }
 
+function powerStats(history) {
+  if (!history || history.length === 0) return { min: 0, avg: 0, max: 0 };
+  let min = history[0], max = history[0], sum = 0;
+  for (const v of history) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  return { min, avg: sum / history.length, max };
+}
+
 function PowerSection({ powerW, activePct, history, energy, durationMs }) {
   const barPct = Math.min(activePct, 100);
+  const ps = powerStats(history);
+  const efficiency = activePct > 0 ? (powerW / activePct) : null;
+  const measuredSec = durationMs / 1000;
   return html`
     <div class="section">
       <h2>Power</h2>
       <div><span class="power-big">${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
+      <div style="margin-top:4px;font-size:11px;color:var(--dim)">min ${ps.min.toFixed(3)}W · avg ${ps.avg.toFixed(3)}W · max ${ps.max.toFixed(3)}W</div>
+      ${efficiency !== null ? html`<div style="font-size:11px;color:var(--dim)">efficiency: ${efficiency.toFixed(4)} W/%active</div>` : null}
       <div style="margin-top:8px;font-size:12px;color:var(--dim)">ANE Active</div>
       <div class="bar-outer">
         <div class="bar-inner" style="width:${barPct}%;background:var(--green);opacity:0.6"></div>
         <span class="bar-label">${activePct.toFixed(1)}%</span>
       </div>
       <${Sparkline} data=${history} />
+      <div style="font-size:11px;color:var(--dim);margin-bottom:4px">measured ${measuredSec.toFixed(3)}s</div>
       ${energy.map(ch => {
         const watts = ch.value ? energyToWatts(ch.value, ch.unit, durationMs) : 0;
         return html`
@@ -275,7 +295,16 @@ function ComputeUtilization({ channels }) {
       pct: s.residency_ns / total * 100,
       fill: maxRes > 0 ? s.residency_ns / maxRes * 100 : 0,
     }));
-    items.push({ channel: ch.channel, rows });
+    // Find peak bucket and weighted average.
+    let peakName = '', peakPct = 0, weightedSum = 0;
+    for (const s of ch.states) {
+      const pct = s.residency_ns / total * 100;
+      if (pct > peakPct) { peakPct = pct; peakName = s.name.trim(); }
+      const val = parseFloat(s.name.trim().replace('%', '')) || 0;
+      weightedSum += val * s.residency_ns;
+    }
+    const weightedAvg = weightedSum / total;
+    items.push({ channel: ch.channel, rows, peakName, peakPct, weightedAvg });
   }
   if (items.length === 0) return null;
   return html`
@@ -283,6 +312,7 @@ function ComputeUtilization({ channels }) {
       <h2>Compute Utilization</h2>
       ${items.map(item => html`
         <div style="color:var(--dim);font-size:11px;margin-bottom:4px">${item.channel}</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:6px">Peak: ${item.peakName} (${item.peakPct.toFixed(1)}%) · Weighted avg: ${item.weightedAvg.toFixed(1)}%</div>
         <div class="histogram">
           ${item.rows.map(r => html`
             <div class="bar-row">
@@ -358,9 +388,12 @@ function BandwidthSection({ channels }) {
           .sort((a, b) => b.pct - a.pct)
           .slice(0, 5);
         if (active.length === 0) return null;
+        // Find lowest tier — if it dominates (>90%), label as idle.
+        const lowestTier = active[active.length - 1];
+        const isIdle = active.length === 1 && lowestTier.pct > 90;
         return html`
           <div class="bw-row">
-            <span class="bw-name">${ch.channel}</span>
+            <span class="bw-name">${ch.channel}${isIdle ? html` <span style="color:var(--dim);font-size:10px">(idle)</span>` : ''}</span>
             ${active.map(s => html`<span class="bw-chip">${s.name}</span> <span class="bw-pct">${Math.round(s.pct)}%</span> `)}
           </div>
         `;
@@ -369,13 +402,18 @@ function BandwidthSection({ channels }) {
   `;
 }
 
-function ThrottleSection({ channels }) {
+function ThrottleSection({ channels, durationMs }) {
   if (!channels || channels.length === 0) return null;
   const active = channels.filter(ch => ch.value > 0);
   if (active.length === 0) return null;
+  let totalThrottles = 0;
+  for (const ch of active) totalThrottles += ch.value;
+  const durSec = (durationMs || 1000) / 1000;
+  const rate = durSec > 0 ? totalThrottles / durSec : 0;
   return html`
     <div class="section">
       <h2 class="throttle-alert">Throttle</h2>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px">Total: ${totalThrottles} events (${rate.toFixed(1)}/s)</div>
       ${active.map(ch => html`
         <div class="energy-row">
           <span>${ch.channel}</span>
@@ -386,18 +424,33 @@ function ThrottleSection({ channels }) {
   `;
 }
 
-function CounterTable({ channels }) {
+function CounterTable({ channels, durationMs }) {
   if (!channels || channels.length === 0) return null;
   const active = channels.filter(ch => ch.value !== 0);
   if (active.length === 0) return null;
+  const durSec = (durationMs || 1000) / 1000;
   return html`
     <div class="section">
       <h2>Counters</h2>
       <table class="counter-table">
+        <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">count</td><td style="color:var(--dim)">/s</td></tr></thead>
         <tbody>
-          ${active.map(ch => html`<tr><td>${ch.channel}</td><td>${ch.value}</td></tr>`)}
+          ${active.map(ch => {
+            const rate = durSec > 0 ? ch.value / durSec : 0;
+            return html`<tr><td>${ch.channel}</td><td>${ch.value}</td><td style="color:var(--dim)">${rate.toFixed(1)}</td></tr>`;
+          })}
         </tbody>
       </table>
+    </div>
+  `;
+}
+
+function Footer({ durationMs, channelCount }) {
+  const measuredSec = (durationMs / 1000).toFixed(3);
+  const now = new Date().toLocaleString();
+  return html`
+    <div style="margin-top:16px;font-size:11px;color:var(--dim);text-align:center">
+      Sample: ${measuredSec}s measured · ${channelCount} channels · ${now}
     </div>
   `;
 }
