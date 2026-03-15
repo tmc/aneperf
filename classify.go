@@ -2,7 +2,9 @@
 
 package aneperf
 
-import "strings"
+import (
+	"strings"
+)
 
 // ChannelsByCategory groups ANE channels by their IOReport category.
 type ChannelsByCategory struct {
@@ -24,7 +26,10 @@ func ClassifyChannels(channels []Channel) ChannelsByCategory {
 			c.Energy = append(c.Energy, ch)
 		case "Interrupt Statistics (by index)":
 			c.Interrupt = append(c.Interrupt, ch)
-		case "PMP":
+		default:
+			if !strings.HasPrefix(ch.Group, "PMP") {
+				break
+			}
 			switch {
 			case ch.SubGroup == "SOC Floor":
 				c.Voltage = append(c.Voltage, ch)

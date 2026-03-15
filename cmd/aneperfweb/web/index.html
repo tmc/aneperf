@@ -96,7 +96,8 @@ function classifyChannels(channels) {
         c.energy.push(ch); break;
       case 'Interrupt Statistics (by index)':
         c.interrupt.push(ch); break;
-      case 'PMP':
+      default:
+        if (!ch.group.startsWith('PMP')) break;
         if (ch.subgroup === 'SOC Floor') c.voltage.push(ch);
         else if (ch.subgroup === 'DCS Floor') c.dcsFloor.push(ch);
         else if (ch.subgroup === 'Fast-Die CE') c.computeEn.push(ch);

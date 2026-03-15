@@ -90,6 +90,7 @@ func cstring(s string) *byte {
 
 func dictGetString(dict cfDictionaryRef, key string) string {
 	k := makeCFString(key)
+	defer cfRelease(cfTypeRef(k))
 	v := cfDictionaryGetValue(dict, cfStringRef(k))
 	if v == 0 {
 		return ""
@@ -102,6 +103,7 @@ func dictGetString(dict cfDictionaryRef, key string) string {
 
 func dictGetInt64(dict cfDictionaryRef, key string) int64 {
 	k := makeCFString(key)
+	defer cfRelease(cfTypeRef(k))
 	v := cfDictionaryGetValue(dict, cfStringRef(k))
 	if v == 0 {
 		return 0
@@ -116,6 +118,7 @@ func dictGetInt64(dict cfDictionaryRef, key string) int64 {
 
 func dictGetBool(dict cfDictionaryRef, key string) (bool, bool) {
 	k := makeCFString(key)
+	defer cfRelease(cfTypeRef(k))
 	v := cfDictionaryGetValue(dict, cfStringRef(k))
 	if v == 0 {
 		return false, false
