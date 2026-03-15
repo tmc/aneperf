@@ -11,6 +11,7 @@ import (
 var (
 	ioreportHandle uintptr
 
+	ioReportCopyAllChannels       func(a uint64, b uint64) cfDictionaryRef
 	ioReportCopyChannelsInGroup   func(group cfStringRef, subgroup cfStringRef, a uint64, b uint64, c uint64) cfDictionaryRef
 	ioReportMergeChannels         func(into cfDictionaryRef, from cfDictionaryRef, unused uintptr)
 	ioReportCreateSubscription    func(a uintptr, channels cfDictionaryRef, out *cfDictionaryRef, d uint64, e uintptr) uintptr
@@ -39,6 +40,7 @@ func loadIOReport() error {
 	if err != nil {
 		return fmt.Errorf("load libIOReport: %w", err)
 	}
+	purego.RegisterLibFunc(&ioReportCopyAllChannels, ioreportHandle, "IOReportCopyAllChannels")
 	purego.RegisterLibFunc(&ioReportCopyChannelsInGroup, ioreportHandle, "IOReportCopyChannelsInGroup")
 	purego.RegisterLibFunc(&ioReportMergeChannels, ioreportHandle, "IOReportMergeChannels")
 	purego.RegisterLibFunc(&ioReportCreateSubscription, ioreportHandle, "IOReportCreateSubscription")
@@ -63,27 +65,71 @@ type subscription struct {
 	channels cfDictionaryRef
 }
 
+// discoverANEGroups scans all IOReport channels and returns the set of group
+// names that contain at least one ANE-related channel. This avoids hardcoding
+// chip-specific group names like "PMP0" vs "PMP".
+func discoverANEGroups() map[string]bool {
+	groups := map[string]bool{
+		"Energy Model":                  true,
+		"Interrupt Statistics (by index)": true,
+	}
+	all := ioReportCopyAllChannels(0, 0)
+	if all == 0 {
+		return groups
+	}
+	defer cfRelease(cfTypeRef(all))
+
+	key := makeCFString("IOReportChannels")
+	defer cfRelease(cfTypeRef(key))
+	arrRef := cfDictionaryGetValue(all, key)
+	if arrRef == 0 {
+		return groups
+	}
+	arr := cfArrayRef(arrRef)
+	n := cfArrayGetCount(arr)
+	for i := range n {
+		item := cfDictionaryRef(cfArrayGetValueAtIndex(arr, cfIndex(i)))
+		if item == 0 {
+			continue
+		}
+		group := cfStringToGo(ioReportChannelGetGroup(item))
+		if groups[group] {
+			continue
+		}
+		subgroup := cfStringToGo(ioReportChannelGetSubGroup(item))
+		name := cfStringToGo(ioReportChannelGetChannelName(item))
+		if containsANE(group) || containsANE(subgroup) || containsANE(name) {
+			groups[group] = true
+		}
+	}
+	return groups
+}
+
 func createSubscription() (*subscription, error) {
-	energyChannels := ioReportCopyChannelsInGroup(makeCFString("Energy Model"), 0, 0, 0, 0)
-	if energyChannels == 0 {
-		return nil, fmt.Errorf("create subscription: no energy model channels")
+	groups := discoverANEGroups()
+
+	var base cfDictionaryRef
+	for group := range groups {
+		gRef := makeCFString(group)
+		ch := ioReportCopyChannelsInGroup(gRef, 0, 0, 0, 0)
+		cfRelease(cfTypeRef(gRef))
+		if ch == 0 {
+			continue
+		}
+		if base == 0 {
+			base = ch
+		} else {
+			ioReportMergeChannels(base, ch, 0)
+			cfRelease(cfTypeRef(ch))
+		}
+	}
+	if base == 0 {
+		return nil, fmt.Errorf("create subscription: no channels found")
 	}
 
-	pmpChannels := ioReportCopyChannelsInGroup(makeCFString("PMP"), 0, 0, 0, 0)
-	if pmpChannels != 0 {
-		ioReportMergeChannels(energyChannels, pmpChannels, 0)
-		cfRelease(cfTypeRef(pmpChannels))
-	}
-
-	intChannels := ioReportCopyChannelsInGroup(makeCFString("Interrupt Statistics (by index)"), 0, 0, 0, 0)
-	if intChannels != 0 {
-		ioReportMergeChannels(energyChannels, intChannels, 0)
-		cfRelease(cfTypeRef(intChannels))
-	}
-
-	count := ioReportGetChannelCount(energyChannels)
-	channelsCopy := cfDictionaryCreateMutableCopy(0, count, energyChannels)
-	cfRelease(cfTypeRef(energyChannels))
+	count := ioReportGetChannelCount(base)
+	channelsCopy := cfDictionaryCreateMutableCopy(0, count, base)
+	cfRelease(cfTypeRef(base))
 
 	if channelsCopy == 0 {
 		return nil, fmt.Errorf("create subscription: failed to copy channels")
@@ -104,7 +150,9 @@ func (s *subscription) sample() cfDictionaryRef {
 }
 
 func extractChannels(samples cfDictionaryRef) []Channel {
-	arrRef := cfDictionaryGetValue(samples, makeCFString("IOReportChannels"))
+	key := makeCFString("IOReportChannels")
+	defer cfRelease(cfTypeRef(key))
+	arrRef := cfDictionaryGetValue(samples, key)
 	if arrRef == 0 {
 		return nil
 	}
@@ -163,12 +211,22 @@ func filterANEChannels(channels []Channel) []Channel {
 	return out
 }
 
+// containsANE reports whether s contains "ANE" (case-insensitive) at a
+// word boundary: the character before the match (if any) must be a
+// non-letter. This avoids false positives like "VLane", "Miscellaneous",
+// or "LanesEng" while still matching "ANEXL", "ANE0", "dart-ane0", etc.
 func containsANE(s string) bool {
 	for i := 0; i+3 <= len(s); i++ {
 		c0, c1, c2 := s[i], s[i+1], s[i+2]
 		if (c0 == 'a' || c0 == 'A') && (c1 == 'n' || c1 == 'N') && (c2 == 'e' || c2 == 'E') {
-			return true
+			if i == 0 || !isLetter(s[i-1]) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func isLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

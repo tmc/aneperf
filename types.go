@@ -2,7 +2,10 @@
 
 package aneperf
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Sample represents a point-in-time snapshot of ANE performance counters.
 type Sample struct {
@@ -62,7 +65,10 @@ func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }) {
 			if ch.Value != 0 {
 				b.ReportMetric(float64(ch.Value), "ane-energy-"+ch.Unit+"/op")
 			}
-		case "PMP":
+		default:
+			if !strings.HasPrefix(ch.Group, "PMP") {
+				break
+			}
 			if ch.SubGroup == "SOC Floor" && len(ch.States) > 0 {
 				// Report active percentage for voltage state channels.
 				var total, vminRes int64
@@ -89,7 +95,7 @@ func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }) {
 				b.ReportMetric(float64(ch.Value), "ane-throttle-events/op")
 			}
 		case "Interrupt Statistics (by index)":
-			if ch.Value > 0 && containsANE(ch.Channel) || len(ch.Channel) > 20 {
+			if ch.Value > 0 && (containsANE(ch.Channel) || len(ch.Channel) > 20) {
 				name := sanitizeMetricName(ch.Channel)
 				b.ReportMetric(float64(ch.Value), name+"/op")
 			}

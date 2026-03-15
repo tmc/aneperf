@@ -62,6 +62,14 @@ func TestContainsANE(t *testing.T) {
 		{"an", false},
 		{"", false},
 		{"aNe", true},
+		{"dart-ane0", true},
+		{"ANE0", true},
+		{"THROT-ANE-SUM", true},
+		{"ANE_THROTTLE_HW_TRIG", true},
+		{"ANEXL", true},
+		{"VLane", false},
+		{"Miscellaneous", false},
+		{"LanesEng", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
