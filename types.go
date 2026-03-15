@@ -50,8 +50,11 @@ type Delta struct {
 //
 // Reported metrics:
 //   - ane-watts: ANE power consumption
-//   - ane-energy-mJ/op: total ANE energy in millijoules
-//   - ane-active-%: percentage of time not at VMIN
+//   - ane-energy-{unit}/op: total ANE energy (mJ, uJ, or nJ)
+//   - {channel}-active-%: percentage of time not at VMIN (per voltage channel)
+//   - ane-compute-%: weighted CE utilization (Fast-Die CE histogram)
+//   - ane-cluster-active-%: ANE cluster power-on residency
+//   - ane-throttle-{reason}-act-%: per-reason throttle ACT residency (only if >0)
 //   - ane-interrupts/op: total interrupt handler count
 //   - ane-throttle-events/op: throttle event count (only if >0)
 //   - sample-ns/op: measurement duration
@@ -113,6 +116,20 @@ func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }) {
 	}
 	if totalInterrupts > 0 {
 		b.ReportMetric(float64(totalInterrupts), "ane-interrupts/op")
+	}
+
+	// Report derived stats from newly classified channels.
+	stats := ComputeStats(d)
+	if stats.ActivePct > 0 {
+		b.ReportMetric(stats.ActivePct, "ane-compute-%")
+	}
+	if stats.ClusterActivePct > 0 {
+		b.ReportMetric(stats.ClusterActivePct, "ane-cluster-active-%")
+	}
+	for reason, actPct := range stats.ThrottleReasons {
+		if actPct > 0 {
+			b.ReportMetric(actPct, "ane-throttle-"+sanitizeMetricName(reason)+"-act-%")
+		}
 	}
 }
 
