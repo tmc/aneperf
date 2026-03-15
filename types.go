@@ -74,7 +74,8 @@ func (m Metric) has(flag Metric) bool { return m&flag != 0 }
 // ReportMetrics reports delta metrics to a testing.B-compatible reporter.
 //
 // The optional metrics arguments select which categories to report.
-// If none are provided, all metrics are reported (MetricAll).
+// If none are provided, MetricDefault is used (power, energy, compute, duration).
+// Pass MetricAll explicitly for the full set.
 //
 // Reported metrics:
 //   - ane-watts: ANE power consumption (MetricPower)
@@ -87,7 +88,7 @@ func (m Metric) has(flag Metric) bool { return m&flag != 0 }
 //   - ane-cluster-active-%: ANE cluster power-on residency (MetricCluster)
 //   - ane-throttle-{reason}-act-%: per-reason throttle ACT residency (MetricThrottle)
 func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }, metrics ...Metric) {
-	mask := MetricAll
+	mask := MetricDefault
 	if len(metrics) > 0 {
 		mask = 0
 		for _, m := range metrics {
