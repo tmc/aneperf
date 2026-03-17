@@ -15,6 +15,8 @@ func TestComputeStats(t *testing.T) {
 		wantInterrupts     int64
 		wantRatePositve    bool
 		wantThrottles      int64
+		checkGPUActive     bool
+		wantGPUActive      float64
 		checkClusterActive bool
 		wantClusterActive  float64
 		wantThrottleReason map[string]float64
@@ -95,6 +97,21 @@ func TestComputeStats(t *testing.T) {
 			wantClusterActive:  80,
 		},
 		{
+			name: "gpu active residency",
+			delta: Delta{
+				Duration: time.Second,
+				Channels: []Channel{
+					{Group: "GPU Stats", SubGroup: "GPU Performance States", Channel: "GPUPH", States: []StateEntry{
+						{Name: "OFF", Residency: 200},
+						{Name: "IDLE", Residency: 300},
+						{Name: "P1", Residency: 500},
+					}},
+				},
+			},
+			checkGPUActive: true,
+			wantGPUActive:  50,
+		},
+		{
 			name: "throttle detail reasons",
 			delta: Delta{
 				Duration: time.Second,
@@ -169,6 +186,9 @@ func TestComputeStats(t *testing.T) {
 			}
 			if tt.checkClusterActive && got.ClusterActivePct != tt.wantClusterActive {
 				t.Errorf("ClusterActivePct = %v, want %v", got.ClusterActivePct, tt.wantClusterActive)
+			}
+			if tt.checkGPUActive && got.GPUActivePct != tt.wantGPUActive {
+				t.Errorf("GPUActivePct = %v, want %v", got.GPUActivePct, tt.wantGPUActive)
 			}
 			if tt.wantThrottleReason != nil {
 				for name, wantPct := range tt.wantThrottleReason {

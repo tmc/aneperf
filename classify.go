@@ -12,6 +12,7 @@ type ChannelsByCategory struct {
 	Voltage        []Channel // SOC Floor (VMIN/VNOM/VMAX)
 	DCSFloor       []Channel // DCS Floor (F1-F6)
 	ComputeEn      []Channel // Fast-Die CE (0%-100%)
+	GPUStats       []Channel // GPU Stats (performance states)
 	Bandwidth      []Channel // AF BW + DCS BW + SOC-NI Util BW
 	Throttle       []Channel // PWRS0 throttle counters
 	Interrupt      []Channel // Interrupt Statistics
@@ -28,6 +29,8 @@ func ClassifyChannels(channels []Channel) ChannelsByCategory {
 			c.Energy = append(c.Energy, ch)
 		case "Interrupt Statistics (by index)":
 			c.Interrupt = append(c.Interrupt, ch)
+		case "GPU Stats":
+			c.GPUStats = append(c.GPUStats, ch)
 		case "SoC Stats":
 			switch ch.SubGroup {
 			case "Events":

@@ -4,6 +4,7 @@ package aneperf
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ebitengine/purego"
 )
@@ -65,13 +66,13 @@ type subscription struct {
 	channels cfDictionaryRef
 }
 
-// discoverANEGroups scans all IOReport channels and returns the set of group
-// names that contain at least one ANE-related channel. This avoids hardcoding
-// chip-specific group names like "PMP0" vs "PMP".
-func discoverANEGroups() map[string]bool {
+// discoverMonitoredGroups scans all IOReport channels and returns the set of
+// groups needed for ANE telemetry plus a small GPU surface.
+func discoverMonitoredGroups() map[string]bool {
 	groups := map[string]bool{
-		"Energy Model":                  true,
+		"Energy Model":                    true,
 		"Interrupt Statistics (by index)": true,
+		"GPU Stats":                       true,
 	}
 	all := ioReportCopyAllChannels(0, 0)
 	if all == 0 {
@@ -106,7 +107,7 @@ func discoverANEGroups() map[string]bool {
 }
 
 func createSubscription() (*subscription, error) {
-	groups := discoverANEGroups()
+	groups := discoverMonitoredGroups()
 
 	var base cfDictionaryRef
 	for group := range groups {
@@ -201,14 +202,24 @@ func extractChannels(samples cfDictionaryRef) []Channel {
 	return channels
 }
 
-func filterANEChannels(channels []Channel) []Channel {
+func filterMonitoredChannels(channels []Channel) []Channel {
 	var out []Channel
 	for _, ch := range channels {
-		if containsANE(ch.SubGroup) || containsANE(ch.Channel) {
+		if containsANE(ch.SubGroup) || containsANE(ch.Channel) || isGPUChannel(ch) {
 			out = append(out, ch)
 		}
 	}
 	return out
+}
+
+func isGPUChannel(ch Channel) bool {
+	if ch.Group == "GPU Stats" {
+		return ch.SubGroup == "GPU Performance States" || strings.TrimSpace(ch.Channel) == "GPUPH"
+	}
+	if ch.Group != "Energy Model" {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(ch.Channel), "GPU")
 }
 
 // containsANE reports whether s contains "ANE" (case-insensitive) at a

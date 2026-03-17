@@ -11,12 +11,12 @@ import (
 var (
 	iokitHandle uintptr
 
-	ioMainPort                      func(unused uintptr, port *uint32) int32
-	ioServiceMatching               func(name *byte) cfDictionaryRef
-	ioServiceGetMatchingServices    func(mainPort uint32, matching cfDictionaryRef, iterator *uint32) int32
-	ioIteratorNext                  func(iterator uint32) uint32
+	ioMainPort                        func(unused uintptr, port *uint32) int32
+	ioServiceMatching                 func(name *byte) cfDictionaryRef
+	ioServiceGetMatchingServices      func(mainPort uint32, matching cfDictionaryRef, iterator *uint32) int32
+	ioIteratorNext                    func(iterator uint32) uint32
 	ioRegistryEntryCreateCFProperties func(entry uint32, properties *cfDictionaryRef, allocator uintptr, options uint32) int32
-	ioObjectRelease                 func(object uint32) int32
+	ioObjectRelease                   func(object uint32) int32
 )
 
 func loadIOKit() error {
@@ -89,7 +89,9 @@ func ReadDeviceInfo() (DeviceInfo, error) {
 
 	var di DeviceInfo
 
-	devPropsRef := cfDictionaryGetValue(props, makeCFString("DeviceProperties"))
+	devicePropertiesKey := makeCFString("DeviceProperties")
+	defer cfRelease(cfTypeRef(devicePropertiesKey))
+	devPropsRef := cfDictionaryGetValue(props, devicePropertiesKey)
 	if devPropsRef != 0 {
 		devProps := cfDictionaryRef(devPropsRef)
 		di.Architecture = dictGetString(devProps, "ANEDevicePropertyTypeANEArchitectureTypeStr")
@@ -104,7 +106,9 @@ func ReadDeviceInfo() (DeviceInfo, error) {
 		di.FirmwareOK = v
 	}
 
-	pmRef := cfDictionaryGetValue(props, makeCFString("IOPowerManagement"))
+	ioPowerManagementKey := makeCFString("IOPowerManagement")
+	defer cfRelease(cfTypeRef(ioPowerManagementKey))
+	pmRef := cfDictionaryGetValue(props, ioPowerManagementKey)
 	if pmRef != 0 {
 		pm := cfDictionaryRef(pmRef)
 		di.PowerState = dictGetInt64(pm, "CurrentPowerState")

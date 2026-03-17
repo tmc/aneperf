@@ -9,10 +9,13 @@ import (
 
 // Sample represents a point-in-time snapshot of ANE performance counters.
 type Sample struct {
-	Timestamp time.Time  `json:"timestamp"`
-	Device    DeviceInfo `json:"device"`
-	ANEPowerW float64    `json:"ane_power_watts,omitempty"`
-	Channels  []Channel  `json:"channels,omitempty"`
+	Timestamp    time.Time  `json:"timestamp"`
+	Device       DeviceInfo `json:"device"`
+	ANEPowerW    float64    `json:"ane_power_watts,omitempty"`
+	GPUPowerW    float64    `json:"gpu_power_watts,omitempty"`
+	GPUActivePct float64    `json:"gpu_active_pct,omitempty"`
+	GPUTempC     float64    `json:"gpu_temp_c,omitempty"`
+	Channels     []Channel  `json:"channels,omitempty"`
 }
 
 // Channel represents a single IOReport channel with its current value or states.
@@ -40,10 +43,13 @@ type Snapshot struct {
 
 // Delta contains the difference between two snapshots.
 type Delta struct {
-	Duration time.Duration `json:"duration"`
-	Device   DeviceInfo    `json:"device"`
-	PowerW   float64       `json:"ane_power_watts"`
-	Channels []Channel     `json:"channels,omitempty"`
+	Duration     time.Duration `json:"duration"`
+	Device       DeviceInfo    `json:"device"`
+	PowerW       float64       `json:"ane_power_watts"`
+	GPUPowerW    float64       `json:"gpu_power_watts,omitempty"`
+	GPUActivePct float64       `json:"gpu_active_pct,omitempty"`
+	GPUTempC     float64       `json:"gpu_temp_c,omitempty"`
+	Channels     []Channel     `json:"channels,omitempty"`
 }
 
 // Metric selects which categories of metrics ReportMetrics emits.
@@ -106,7 +112,7 @@ func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }, metri
 	for _, ch := range d.Channels {
 		switch ch.Group {
 		case "Energy Model":
-			if mask.has(MetricEnergy) && ch.Value != 0 {
+			if mask.has(MetricEnergy) && ch.Value != 0 && containsANE(ch.Channel) {
 				b.ReportMetric(float64(ch.Value), "ane-energy-"+ch.Unit+"/op")
 			}
 		default:
@@ -207,6 +213,50 @@ func computeANEPower(channels []Channel, durationMs float64) float64 {
 		}
 	}
 	return total
+}
+
+func computeGPUPower(channels []Channel, durationMs float64) float64 {
+	var total float64
+	for _, ch := range channels {
+		if ch.Group == "Energy Model" && isGPUChannel(ch) && ch.Value != 0 {
+			total += energyToWatts(ch.Value, ch.Unit, durationMs)
+		}
+	}
+	return total
+}
+
+func computeGPUTemp(channels []Channel) float64 {
+	var sum float64
+	var n int
+	for _, ch := range channels {
+		if ch.Group != "GPU Stats" || ch.SubGroup != "Temperature" {
+			continue
+		}
+		if !strings.HasSuffix(strings.TrimSpace(ch.Channel), "Latest") || ch.Value <= 0 {
+			continue
+		}
+		temp := normalizeTemperature(ch.Value)
+		if temp <= 0 || temp > 150 {
+			continue
+		}
+		sum += temp
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+
+func normalizeTemperature(v int64) float64 {
+	temp := float64(v)
+	switch {
+	case temp > 10000:
+		temp /= 1000
+	case temp > 1000:
+		temp /= 100
+	}
+	return temp
 }
 
 // sanitizeMetricName lowercases and replaces non-alphanumeric chars with hyphens.

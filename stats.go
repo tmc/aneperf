@@ -6,12 +6,13 @@ import "strings"
 
 // DeltaStats contains derived metrics computed from a Delta.
 type DeltaStats struct {
-	ActivePct       float64 // weighted CE utilization or voltage fallback
-	PeakCEBucket    string  // CE bucket with highest residency ("0%", "45%", etc.)
-	PeakCEPct       float64 // residency % in that peak bucket
-	TotalInterrupts int64
-	InterruptRate   float64 // interrupts/sec (using Delta.Duration)
-	TotalThrottles  int64
+	ActivePct        float64 // weighted CE utilization or voltage fallback
+	PeakCEBucket     string  // CE bucket with highest residency ("0%", "45%", etc.)
+	PeakCEPct        float64 // residency % in that peak bucket
+	TotalInterrupts  int64
+	InterruptRate    float64 // interrupts/sec (using Delta.Duration)
+	TotalThrottles   int64
+	GPUActivePct     float64            // GPU active residency from GPU performance states
 	ClusterActivePct float64            // first PACC*_ANE channel ACT / (ACT+INACT) * 100
 	ThrottleReasons  map[string]float64 // throttle name → ACT residency %
 }
@@ -47,6 +48,8 @@ func ComputeStats(d Delta) DeltaStats {
 			s.TotalThrottles += ch.Value
 		}
 	}
+
+	s.GPUActivePct = computeGPUActivePct(cat.GPUStats)
 
 	// Cluster power — compute ACT residency from PACC*_ANE channels.
 	s.ClusterActivePct = computeClusterActivePct(cat.ClusterPower)
@@ -147,6 +150,26 @@ func computeClusterActivePct(channels []Channel) float64 {
 		}
 		if total > 0 {
 			return float64(actRes) / float64(total) * 100
+		}
+	}
+	return 0
+}
+
+func computeGPUActivePct(channels []Channel) float64 {
+	for _, ch := range channels {
+		if len(ch.States) == 0 {
+			continue
+		}
+		var activeRes, total int64
+		for _, s := range ch.States {
+			total += s.Residency
+			name := strings.TrimSpace(s.Name)
+			if name != "OFF" && name != "IDLE" && name != "DOWN" {
+				activeRes += s.Residency
+			}
+		}
+		if total > 0 {
+			return float64(activeRes) / float64(total) * 100
 		}
 	}
 	return 0

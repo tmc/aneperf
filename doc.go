@@ -1,8 +1,8 @@
 // Package aneperf provides Apple Neural Engine performance monitoring.
 //
 // It uses Apple's private IOReport and IOKit APIs via purego (no cgo) to
-// sample ANE energy, power management state residency, and interrupt
-// statistics.
+// sample ANE energy, power management state residency, interrupt statistics,
+// and a small GPU metrics surface.
 //
 // # Quick Start
 //
@@ -53,26 +53,35 @@
 //     per sample interval, converted to watts for display.
 //
 //   - PMP-prefixed groups (Power Management):
+//
 //   - SOC Floor (Voltage States): VMIN/VNOM/VMAX residency. VMIN means the ANE
 //     is idle or in its lowest voltage rail. Higher states (VNOM, VMAX) indicate
 //     active compute at higher performance points.
+//
 //   - DCS Floor: DCS frequency states. Higher frequency states indicate more
 //     memory bandwidth demand from the ANE.
+//
 //   - Fast-Die CE: Histogram of ANE utilization percentage buckets (0% through
 //     100%). The weighted average gives overall utilization.
+//
 //   - PWRS0 (Throttle Counters): Count of throttle events in the sample interval.
+//
 //   - AF BW / DCS BW / SOC-NI Util BW (Bandwidth): Memory bus utilization tiers.
 //     Channels are per-link and per-direction: RD=read, WR=write, RD+WR=combined.
 //
 //   - Interrupt Statistics (by index): Hardware interrupt counts and handler time.
+//
 //   - Handler Count: Number of interrupt handler invocations.
+//
 //   - Handler Time (MATUs): Cumulative time in handlers, measured in Mach
 //     absolute time units.
 //
 //   - SoC Stats:
+//
 //   - Cluster Power States (PACC*_ANE): Whether the ANE cluster is powered on
 //     (ACT) or off (INACT). High ACT residency means the ANE hardware is
 //     available and has been active.
+//
 //   - Events (ANE_THROTTLE_*): Per-reason throttle residency. Each channel
 //     tracks a specific throttle trigger. ACT residency > 0 means the ANE was
 //     actively throttled for that reason. Known triggers include PPT, ADCLK,

@@ -58,6 +58,9 @@ func (s *Sampler) Stop(snap Snapshot) Delta {
 		return Delta{Duration: duration, Device: dev}
 	}
 
+	currChannels := extractChannels(curr)
+	gpuTemp := computeGPUTemp(currChannels)
+
 	delta := ioReportCreateSamplesDelta(snap.raw, curr, 0)
 	cfRelease(cfTypeRef(snap.raw))
 	cfRelease(cfTypeRef(curr))
@@ -67,14 +70,19 @@ func (s *Sampler) Stop(snap Snapshot) Delta {
 	}
 	defer cfRelease(cfTypeRef(delta))
 
-	channels := filterANEChannels(extractChannels(delta))
-	power := computeANEPower(channels, float64(duration.Milliseconds()))
+	channels := filterMonitoredChannels(extractChannels(delta))
+	power := computeANEPower(channels, durationMilliseconds(duration))
+	gpuPower := computeGPUPower(channels, durationMilliseconds(duration))
+	gpuActive := computeGPUActivePct(ClassifyChannels(channels).GPUStats)
 
 	return Delta{
-		Duration: duration,
-		Device:   dev,
-		PowerW:   power,
-		Channels: channels,
+		Duration:     duration,
+		Device:       dev,
+		PowerW:       power,
+		GPUPowerW:    gpuPower,
+		GPUActivePct: gpuActive,
+		GPUTempC:     gpuTemp,
+		Channels:     channels,
 	}
 }
 
@@ -100,6 +108,9 @@ func (s *Sampler) Sample(interval time.Duration) (Sample, error) {
 		return Sample{Timestamp: time.Now(), Device: dev}, nil
 	}
 
+	s2Channels := extractChannels(s2)
+	gpuTemp := computeGPUTemp(s2Channels)
+
 	delta := ioReportCreateSamplesDelta(s1, s2, 0)
 	cfRelease(cfTypeRef(s1))
 	cfRelease(cfTypeRef(s2))
@@ -109,13 +120,22 @@ func (s *Sampler) Sample(interval time.Duration) (Sample, error) {
 	}
 	defer cfRelease(cfTypeRef(delta))
 
-	channels := filterANEChannels(extractChannels(delta))
-	power := computeANEPower(channels, float64(interval.Milliseconds()))
+	channels := filterMonitoredChannels(extractChannels(delta))
+	power := computeANEPower(channels, durationMilliseconds(interval))
+	gpuPower := computeGPUPower(channels, durationMilliseconds(interval))
+	gpuActive := computeGPUActivePct(ClassifyChannels(channels).GPUStats)
 
 	return Sample{
-		Timestamp: time.Now(),
-		Device:    dev,
-		ANEPowerW: power,
-		Channels:  channels,
+		Timestamp:    time.Now(),
+		Device:       dev,
+		ANEPowerW:    power,
+		GPUPowerW:    gpuPower,
+		GPUActivePct: gpuActive,
+		GPUTempC:     gpuTemp,
+		Channels:     channels,
 	}, nil
+}
+
+func durationMilliseconds(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
 }
