@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,12 @@ const (
 	ansiCyanBold = "\033[36;1m"
 	ansiWhite    = "\033[37m"
 	ansiRed      = "\033[31m"
+	ansiHome     = "\033[H"
+	ansiClearEOD = "\033[J"
+	ansiAltOn    = "\033[?1049h"
+	ansiAltOff   = "\033[?1049l"
+	ansiHideCur  = "\033[?25l"
+	ansiShowCur  = "\033[?25h"
 )
 
 func main() {
@@ -79,12 +86,24 @@ func runOnce(sampler *aneperf.Sampler, interval time.Duration) error {
 
 var powerHistory []float64
 var gpuPowerHistory []float64
+var gpuStateHistory = newChannelStateWindow(4)
+var bandwidthHistory = newChannelStateWindow(4)
 
 const historyLen = 38
+const maxRenderedStates = 4
 
 func runLive(sampler *aneperf.Sampler, interval time.Duration) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
+
+	powerHistory = nil
+	gpuPowerHistory = nil
+	gpuStateHistory = newChannelStateWindow(4)
+	bandwidthHistory = newChannelStateWindow(4)
+
+	enterLiveScreen()
+	defer leaveLiveScreen()
 
 	snap := sampler.Start()
 	ticker := time.NewTicker(interval)
@@ -93,7 +112,6 @@ func runLive(sampler *aneperf.Sampler, interval time.Duration) error {
 	for {
 		select {
 		case <-sig:
-			fmt.Fprintf(os.Stderr, "\n")
 			return nil
 		case <-ticker.C:
 		}
@@ -115,10 +133,14 @@ func runLive(sampler *aneperf.Sampler, interval time.Duration) error {
 }
 
 func printLive(d aneperf.Delta, interval time.Duration) {
-	fmt.Print("\033[2J\033[H")
-
 	cat := aneperf.ClassifyChannels(d.Channels)
 	stats := aneperf.ComputeStats(d)
+	gpuStateHistory.observe(cat.GPUStats)
+	bandwidthHistory.observe(cat.Bandwidth)
+	gpuStates := gpuStateHistory.smooth(cat.GPUStats)
+	bandwidth := bandwidthHistory.smooth(cat.Bandwidth)
+
+	fmt.Print(ansiHome, ansiClearEOD)
 
 	// Header.
 	fmt.Printf("%s aneperf %s%s— %s  (every %s, measured %.3fs)%s\n",
@@ -158,7 +180,7 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	// Active percentage — prefer Fast-Die CE histogram if available.
 	fmt.Printf("  ANE Active: %s\n", activeBar(stats.ActivePct, 30))
 	if hasGPUInfo(d, cat.GPUStats) {
-		fmt.Printf("  GPU Active: %s\n", activeBar(stats.GPUActivePct, 30))
+		fmt.Printf("  GPU Active: %s\n", activeBar(computeStateActivePct(gpuStates, "OFF", "IDLE", "DOWN"), 30))
 	}
 
 	fmt.Printf("  %s  History:    %s%s\n", ansiDim, sparkline(powerHistory), ansiReset)
@@ -167,24 +189,26 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	}
 
 	// Energy value.
+	haveEnergy := false
 	for _, ch := range cat.Energy {
-		if ch.Value > 0 {
-			watts := energyValueToWatts(ch.Value, ch.Unit, interval)
-			fmt.Printf("  %s%-20s%s %s%5d %s%s %s(%.3fW)%s\n",
-				ansiWhite, ch.Channel, ansiReset,
-				ansiWhite, ch.Value, ch.Unit, ansiReset,
-				ansiDim, watts, ansiReset)
-		} else {
-			fmt.Printf("  %s%-20s%s %s%5d %s%s\n",
-				ansiDim, ch.Channel, ansiReset,
-				ansiDim, ch.Value, ch.Unit, ansiReset)
+		if ch.Value == 0 {
+			continue
 		}
+		haveEnergy = true
+		watts := energyValueToWatts(ch.Value, ch.Unit, interval)
+		fmt.Printf("  %s%-20s%s %s%5d %s%s %s(%.3fW)%s\n",
+			ansiWhite, ch.Channel, ansiReset,
+			ansiWhite, ch.Value, ch.Unit, ansiReset,
+			ansiDim, watts, ansiReset)
+	}
+	if !haveEnergy {
+		fmt.Printf("  %sno non-zero energy deltas%s\n", ansiDim, ansiReset)
 	}
 	fmt.Println()
 
 	// Compute utilization histogram.
 	printComputeUtilization(cat.ComputeEn, stats)
-	printGPUStats(cat.GPUStats)
+	printGPUStats(gpuStates)
 
 	// Voltage states.
 	printStateSection("Voltage States", cat.Voltage, ansiBlue, ansiGreen)
@@ -193,7 +217,7 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	printStateSection("DCS Frequency", cat.DCSFloor, ansiCyan, ansiGreen)
 
 	// Bandwidth — compact summary.
-	printBandwidth(cat.Bandwidth)
+	printBandwidth(bandwidth)
 
 	// Throttle.
 	printThrottle(cat.Throttle, stats.TotalThrottles)
@@ -422,14 +446,24 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 				dominantName = name
 			}
 		}
+		sort.Slice(active, func(i, j int) bool {
+			if active[i].pct == active[j].pct {
+				return active[i].name < active[j].name
+			}
+			return active[i].pct > active[j].pct
+		})
 
 		fmt.Printf("  %-22s", ch.Channel)
-		for _, s := range active {
+		limit := min(len(active), maxRenderedStates)
+		for _, s := range active[:limit] {
 			color := otherColor
 			if s.name == dominantName {
 				color = dominantColor
 			}
 			fmt.Printf("  %s%s%s %.0f%%", color, s.name, ansiReset, s.pct)
+		}
+		if len(active) > limit {
+			fmt.Printf("  %s+%d%s", ansiDim, len(active)-limit, ansiReset)
 		}
 		fmt.Println()
 	}
@@ -477,17 +511,35 @@ func printBandwidth(channels []aneperf.Channel) {
 	fmt.Printf("%s╸ Bandwidth%s\n", ansiBold, ansiReset)
 	fmt.Printf("  %stiers detected from live IOReport state labels%s\n", ansiDim, ansiReset)
 	for _, g := range groups {
+		type bandwidthRow struct {
+			channel string
+			summary bandwidthSummary
+		}
+		var rows []bandwidthRow
+		for _, ch := range g.channels {
+			summary, ok := summarizeBandwidth(ch)
+			if !ok || !summary.isInteresting() {
+				continue
+			}
+			rows = append(rows, bandwidthRow{channel: ch.Channel, summary: summary})
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].summary.AvgGBps == rows[j].summary.AvgGBps {
+				return rows[i].channel < rows[j].channel
+			}
+			return rows[i].summary.AvgGBps > rows[j].summary.AvgGBps
+		})
 		if len(groups) > 1 && g.name != "" {
 			fmt.Printf("  %s— %s —%s\n", ansiDim, g.name, ansiReset)
 		}
 		fmt.Printf("  %-22s  %6s  %-14s  %6s  %7s\n", "channel", "floor", "dominant", "max", "avg")
-		for _, ch := range g.channels {
-			summary, ok := summarizeBandwidth(ch)
-			if !ok {
-				continue
-			}
+		for _, row := range rows {
+			summary := row.summary
 			fmt.Printf("  %-22s  %s%4.0fGB/s%s  %s%-8s%s %4.0f%%  %s%4.0fGB/s%s  %s%5.1fGB/s%s\n",
-				ch.Channel,
+				row.channel,
 				ansiDim, summary.MinGBps, ansiReset,
 				ansiCyan, summary.DominantName, ansiReset, summary.DominantPct,
 				ansiDim, summary.MaxGBps, ansiReset,
@@ -503,6 +555,10 @@ type bandwidthSummary struct {
 	DominantPct  float64
 	MaxGBps      float64
 	AvgGBps      float64
+}
+
+func (s bandwidthSummary) isInteresting() bool {
+	return s.AvgGBps >= s.MinGBps+1 || s.DominantPct < 90
 }
 
 func summarizeBandwidth(ch aneperf.Channel) (bandwidthSummary, bool) {
@@ -749,4 +805,100 @@ func powerStats(history []float64) (min, avg, max float64) {
 
 func hasGPUInfo(d aneperf.Delta, channels []aneperf.Channel) bool {
 	return d.GPUPowerW > 0 || d.GPUActivePct > 0 || len(channels) > 0
+}
+
+func enterLiveScreen() {
+	fmt.Print(ansiAltOn, ansiHideCur, ansiHome, ansiClearEOD)
+}
+
+func leaveLiveScreen() {
+	fmt.Print(ansiShowCur, ansiReset, ansiAltOff)
+}
+
+type channelStateWindow struct {
+	limit   int
+	samples map[string][]map[string]int64
+}
+
+func newChannelStateWindow(limit int) *channelStateWindow {
+	return &channelStateWindow{
+		limit:   limit,
+		samples: make(map[string][]map[string]int64),
+	}
+}
+
+func (w *channelStateWindow) observe(channels []aneperf.Channel) {
+	for _, ch := range channels {
+		if len(ch.States) == 0 {
+			continue
+		}
+		snapshot := make(map[string]int64, len(ch.States))
+		for _, s := range ch.States {
+			name := strings.TrimSpace(s.Name)
+			if name == "" {
+				continue
+			}
+			snapshot[name] += s.Residency
+		}
+		key := channelStateKey(ch)
+		w.samples[key] = append(w.samples[key], snapshot)
+		if len(w.samples[key]) > w.limit {
+			w.samples[key] = w.samples[key][len(w.samples[key])-w.limit:]
+		}
+	}
+}
+
+func (w *channelStateWindow) smooth(channels []aneperf.Channel) []aneperf.Channel {
+	out := make([]aneperf.Channel, 0, len(channels))
+	for _, ch := range channels {
+		key := channelStateKey(ch)
+		snapshots := w.samples[key]
+		if len(snapshots) == 0 {
+			out = append(out, ch)
+			continue
+		}
+		totals := make(map[string]int64)
+		for _, sample := range snapshots {
+			for name, residency := range sample {
+				totals[name] += residency
+			}
+		}
+		smoothed := ch
+		smoothed.States = smoothed.States[:0]
+		for name, residency := range totals {
+			smoothed.States = append(smoothed.States, aneperf.StateEntry{
+				Name:      name,
+				Residency: residency,
+			})
+		}
+		out = append(out, smoothed)
+	}
+	return out
+}
+
+func channelStateKey(ch aneperf.Channel) string {
+	return ch.Group + "\x00" + ch.SubGroup + "\x00" + ch.Channel
+}
+
+func computeStateActivePct(channels []aneperf.Channel, idleStates ...string) float64 {
+	idle := make(map[string]bool, len(idleStates))
+	for _, state := range idleStates {
+		idle[state] = true
+	}
+	for _, ch := range channels {
+		if len(ch.States) == 0 {
+			continue
+		}
+		var activeRes, total int64
+		for _, s := range ch.States {
+			total += s.Residency
+			if !idle[strings.TrimSpace(s.Name)] {
+				activeRes += s.Residency
+			}
+		}
+		if total > 0 {
+			return float64(activeRes) / float64(total) * 100
+		}
+	}
+	return 0
 }
