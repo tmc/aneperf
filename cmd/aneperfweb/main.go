@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -74,11 +75,23 @@ func run(addr string, interval time.Duration) error {
 	if webDir != "" {
 		log.Printf("serving web assets from disk: %s", webDir)
 	}
-	log.Printf("listening on %s", addr)
+	log.Printf("listening on %s", webURL(addr))
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		return err
 	}
 	return nil
+}
+
+func webURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // webDir is set to serve from disk when the directory exists, enabling

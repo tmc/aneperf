@@ -1,9 +1,10 @@
 # aneperf
 
-Apple Neural Engine performance monitoring for macOS.
+Apple Neural Engine performance monitoring for macOS, with lightweight GPU telemetry.
 
-aneperf samples ANE energy, power management state residency, and interrupt
-statistics using Apple's private IOReport and IOKit APIs via
+aneperf samples ANE energy, power management state residency, interrupt
+statistics, and a small GPU metrics surface using Apple's private IOReport and
+IOKit APIs via
 [purego](https://github.com/ebitengine/purego) (no cgo required).
 
 ## Install
@@ -43,8 +44,9 @@ aneperfweb --addr :9092 --interval 500ms
 ```
 
 Open `http://localhost:9092` in a browser. The dashboard shows the same
-metrics as the TUI: power, active %, compute utilization histogram, voltage
-states, DCS frequency, bandwidth, throttle events, and interrupt counters.
+metrics as the TUI: ANE power, GPU power/activity, compute utilization
+histogram, voltage states, DCS frequency, bandwidth, throttle events, and
+interrupt counters.
 
 ## Library API
 
