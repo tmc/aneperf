@@ -13,13 +13,25 @@
   --yellow: #d4a843; --red: #d45050; --orange: #d88040;
   --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
 }
-body { background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 12px; line-height: 1.4; padding: 10px; max-width: 1280px; margin: 0 auto; }
+body {
+  background:
+    radial-gradient(circle at top left, rgba(86, 200, 216, 0.06), transparent 24%),
+    radial-gradient(circle at top right, rgba(91, 155, 213, 0.06), transparent 22%),
+    var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 14px;
+  max-width: 1360px;
+  margin: 0 auto;
+}
 h1 { font-size: 14px; color: var(--cyan); font-weight: 600; }
 h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
 
-.app-shell { display: grid; gap: 8px; }
-.summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-items: start; }
-.detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: start; }
+.app-shell { display: grid; gap: 12px; }
+.summary-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr); gap: 12px; align-items: start; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; align-items: start; }
 .wide-card { grid-column: 1 / -1; }
 .span-2 { grid-column: span 2; }
 
@@ -29,23 +41,41 @@ h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; bo
 .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .dot.off { background: var(--red); }
 
-.device { display: flex; gap: 14px; flex-wrap: wrap; color: var(--dim); font-size: 11px; margin-bottom: 2px; }
+.device { display: flex; gap: 8px; flex-wrap: wrap; color: var(--dim); font-size: 11px; margin-bottom: 2px; }
+.device > span,
+.device-badge { padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,0.02); }
 .device .arch { color: var(--fg); font-weight: 600; }
 .device .fw-ok { color: var(--green); }
 .device .fw-bad { color: var(--red); }
-.device-badge { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg1); }
+.device-badge { display: inline-flex; align-items: center; gap: 6px; }
 .device-badge strong { color: var(--fg); font-weight: 600; }
 
-.section { background: var(--bg1); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; min-width: 0; }
-.summary-card .section { min-height: 124px; }
-.detail-card .section { min-height: 132px; }
-.wide-card .section { min-height: 168px; }
+.section {
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 44%), var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 0;
+}
 
 .power-big { font-size: 22px; font-weight: 700; color: var(--green); }
 .power-unit { font-size: 12px; color: var(--dim); margin-left: 4px; }
-.metrics-inline { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 4px; font-size: 11px; color: var(--dim); }
+.metrics-inline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--dim); }
+.metric-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.025);
+}
 .compact-note { font-size: 11px; color: var(--dim); }
-.empty-state { color: var(--dim); font-size: 11px; padding-top: 8px; }
+.empty-state { color: var(--dim); font-size: 11px; padding-top: 4px; }
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.section-kicker { color: var(--dim); font-size: 11px; }
+.section-status { color: var(--dim); font-size: 10px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+.section-status.live { color: var(--green); }
 
 .bar-outer { background: var(--bg); border-radius: 3px; height: 14px; position: relative; overflow: hidden; margin: 4px 0; }
 .bar-inner { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
@@ -53,8 +83,9 @@ h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; bo
 
 .sparkline { margin: 4px 0; }
 .sparkline svg { display: block; width: 100%; height: 28px; }
+.sparkline-empty { min-height: 28px; display: flex; align-items: center; color: var(--dim); font-size: 11px; }
 
-.energy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; margin-top: 4px; }
+.energy-grid { display: grid; gap: 4px; margin-top: 8px; }
 .energy-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--dim); padding: 1px 0; }
 .energy-row .val { color: var(--fg); }
 .energy-row .watts { color: var(--green); }
@@ -93,19 +124,33 @@ h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; bo
 .bandwidth-tier { white-space: nowrap; }
 .bandwidth-dom { color: var(--fg); white-space: nowrap; }
 .scroll-region { max-height: 240px; overflow: auto; padding-right: 4px; }
-.bandwidth-scroll { overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
-.bandwidth-table { min-width: 430px; }
+.bandwidth-grid { display: grid; gap: 6px; }
+.bandwidth-item {
+  display: grid;
+  grid-template-columns: minmax(88px, 110px) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.bandwidth-item:last-child { border-bottom: 0; padding-bottom: 0; }
+.bandwidth-group { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.bandwidth-desc { min-width: 0; }
+.bandwidth-name { color: var(--fg); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bandwidth-meta { color: var(--dim); font-size: 10px; margin-top: 1px; }
+.bandwidth-avg { color: var(--cyan); font-size: 12px; white-space: nowrap; }
 
 @media (max-width: 900px) {
   .summary-grid,
   .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-grid { grid-template-columns: 1fr; }
   .wide-card,
   .span-2 { grid-column: span 1; }
-  .energy-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
   .summary-grid,
   .detail-grid { grid-template-columns: 1fr; }
+  body { padding: 10px; }
 }
 </style>
 <script type="importmap">
@@ -212,6 +257,51 @@ function energyToWatts(value, unit, intervalMs) {
   }
 }
 
+function isANEEnergyChannel(name) {
+  return /(^|[^A-Za-z])ANE/i.test(String(name || ''));
+}
+
+function isGPUEnergyChannel(name) {
+  return String(name || '').trim().startsWith('GPU');
+}
+
+function summarizeEnergyRows(channels, intervalMs, predicate) {
+  return (channels || [])
+    .filter(ch => predicate(ch.channel))
+    .map(ch => ({
+      name: ch.channel,
+      unit: ch.unit || '',
+      value: ch.value || 0,
+      watts: ch.value ? energyToWatts(ch.value, ch.unit, intervalMs) : 0,
+    }))
+    .filter(row => row.value > 0)
+    .sort((a, b) => b.watts - a.watts || a.name.localeCompare(b.name));
+}
+
+function hasHistorySignal(history) {
+  return (history || []).some(v => v > 0.001);
+}
+
+function summarizeStates(ch) {
+  let total = 0;
+  for (const s of (ch.states || [])) total += s.residency_ns || 0;
+  if (total <= 0) return null;
+  let dominantName = '';
+  let dominantPct = 0;
+  const active = [];
+  for (const s of ch.states || []) {
+    const pct = (s.residency_ns || 0) / total * 100;
+    const name = s.name.trim();
+    if (pct >= 0.5) active.push({ name, pct });
+    if (pct > dominantPct) {
+      dominantPct = pct;
+      dominantName = name;
+    }
+  }
+  active.sort((a, b) => b.pct - a.pct || a.name.localeCompare(b.name));
+  return { channel: ch.channel, total, dominantName, dominantPct, active };
+}
+
 function parseBandwidthGBps(name) {
   const m = String(name || '').match(/([0-9]+)\s*GB\/s/i);
   return m ? parseFloat(m[1]) : 0;
@@ -224,7 +314,6 @@ function summarizeBandwidthChannel(ch) {
   let dominantRes = -1;
   let maxTier = 0;
   let minTier = Infinity;
-  let minTierRes = 0;
 
   for (const s of (ch.states || [])) {
     const res = s.residency_ns || 0;
@@ -239,9 +328,6 @@ function summarizeBandwidthChannel(ch) {
       if (tier > maxTier) maxTier = tier;
       if (tier < minTier) {
         minTier = tier;
-        minTierRes = res;
-      } else if (tier === minTier) {
-        minTierRes += res;
       }
     }
   }
@@ -257,6 +343,7 @@ function summarizeBandwidthChannel(ch) {
     dominantName,
     dominantPct,
     maxTier,
+    subgroup: ch.subgroup || '',
   };
 }
 
@@ -315,20 +402,22 @@ function App() {
   if (activePct === 0) activePct = computeActivePctFromVoltage(cat.voltage);
   const gpuActivePct = delta.gpu_active_pct || computeGPUActivePct(cat.gpuStats);
   const clusterSummary = summarizeClusterPower(cat.clusterPower);
+  const aneEnergy = summarizeEnergyRows(cat.energy, durationMs, isANEEnergyChannel);
+  const gpuEnergy = summarizeEnergyRows(cat.energy, durationMs, isGPUEnergyChannel);
 
   return html`
     <div class="app-shell">
       <${DeviceHeader} dev=${dev} connected=${connected} clusterSummary=${clusterSummary} />
       <div class="summary-grid">
-        <div class="summary-card"><${PowerSection} powerW=${delta.ane_power_watts} activePct=${activePct} history=${historyRef.current} energy=${cat.energy} durationMs=${durationMs} compact=${true} /></div>
-        <div class="summary-card"><${GPUSection} powerW=${delta.gpu_power_watts || 0} activePct=${gpuActivePct} tempC=${delta.gpu_temp_c || 0} history=${gpuHistoryRef.current} channels=${cat.gpuStats} compact=${true} /></div>
+        <div class="summary-card"><${PowerSection} powerW=${delta.ane_power_watts} activePct=${activePct} history=${historyRef.current} energyRows=${aneEnergy} durationMs=${durationMs} /></div>
+        ${cat.gpuStats.length > 0 || delta.gpu_power_watts > 0 || gpuEnergy.length > 0 ? html`<div class="summary-card"><${GPUSection} powerW=${delta.gpu_power_watts || 0} activePct=${gpuActivePct} tempC=${delta.gpu_temp_c || 0} history=${gpuHistoryRef.current} channels=${cat.gpuStats} energyRows=${gpuEnergy} /></div>` : null}
       </div>
       <div class="detail-grid">
-        <div class="detail-card"><${ComputeUtilization} channels=${cat.computeEn} /></div>
-        <div class="detail-card"><${ANEStatesSection} voltage=${cat.voltage} dcsFloor=${cat.dcsFloor} /></div>
-        <div class="detail-card span-2"><${BandwidthSection} channels=${cat.bandwidth} /></div>
-        <div class="detail-card"><${ThrottleOverviewSection} throttle=${cat.throttle} throttleDetail=${cat.throttleDetail} durationMs=${durationMs} /></div>
-        <div class="wide-card"><${CounterTable} channels=${cat.interrupt} durationMs=${durationMs} /></div>
+        <${ComputeUtilization} channels=${cat.computeEn} />
+        <${ANEStatesSection} voltage=${cat.voltage} dcsFloor=${cat.dcsFloor} />
+        <${BandwidthSection} channels=${cat.bandwidth} />
+        <${ThrottleOverviewSection} throttle=${cat.throttle} throttleDetail=${cat.throttleDetail} durationMs=${durationMs} />
+        <${CounterTable} channels=${cat.interrupt} durationMs=${durationMs} />
       </div>
       <${Footer} durationMs=${durationMs} channelCount=${(delta.channels || []).length} />
     </div>
@@ -368,47 +457,54 @@ function powerStats(history) {
   return { min, avg: sum / history.length, max };
 }
 
-function PowerSection({ powerW, activePct, history, energy, durationMs, compact = false }) {
+function PowerSection({ powerW, activePct, history, energyRows, durationMs }) {
   const barPct = Math.min(activePct, 100);
   const ps = powerStats(history);
   const efficiency = activePct > 0 ? (powerW / activePct) : null;
   const measuredSec = durationMs / 1000;
+  const activeNow = powerW > 0.05 || activePct > 1;
   return html`
     <div class="section">
-      <h2>Power</h2>
+      <div class="section-head">
+        <div>
+          <h2>ANE</h2>
+          <div class="section-kicker">Neural engine draw and activity</div>
+        </div>
+        <span class="section-status ${activeNow ? 'live' : ''}">${activeNow ? 'live sample' : 'idle sample'}</span>
+      </div>
       <div title="ANE power draw in watts, computed from IOReport energy counters divided by sample interval"><span class="power-big">${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
       <div class="metrics-inline">
-        <span>min ${ps.min.toFixed(3)}W</span>
-        <span>avg ${ps.avg.toFixed(3)}W</span>
-        <span>max ${ps.max.toFixed(3)}W</span>
-        ${efficiency !== null ? html`<span>eff ${efficiency.toFixed(4)} W/%</span>` : null}
+        <span class="metric-chip">min ${ps.min.toFixed(3)}W</span>
+        <span class="metric-chip">avg ${ps.avg.toFixed(3)}W</span>
+        <span class="metric-chip">max ${ps.max.toFixed(3)}W</span>
+        <span class="metric-chip">window ${measuredSec.toFixed(3)}s</span>
+        ${efficiency !== null ? html`<span class="metric-chip">eff ${efficiency.toFixed(4)} W/%</span>` : null}
       </div>
       <div class="compact-note" style="margin-top:6px">ANE Active</div>
       <div class="bar-outer">
         <div class="bar-inner" style="width:${barPct}%;background:var(--green);opacity:0.6"></div>
         <span class="bar-label">${activePct.toFixed(1)}%</span>
       </div>
-      <${Sparkline} data=${history} />
-      <div class="compact-note">measured ${measuredSec.toFixed(3)}s</div>
-      <div class="energy-grid">
-      ${energy.map(ch => {
-        const watts = ch.value ? energyToWatts(ch.value, ch.unit, durationMs) : 0;
-        return html`
-          <div class="energy-row">
-            <span>${ch.channel}</span>
-            <span>${ch.value ? html`<span class="val">${ch.value} ${ch.unit}</span> <span class="watts">(${watts.toFixed(3)}W)</span>` : html`<span>0 ${ch.unit}</span>`}</span>
-          </div>
-        `;
-      })}
-      </div>
+      <${Sparkline} data=${history} emptyLabel="No recent ANE draw." />
+      ${energyRows.length > 0 ? html`
+        <div class="energy-grid">
+          ${energyRows.slice(0, 4).map(row => html`
+            <div class="energy-row">
+              <span>${row.name}</span>
+              <span><span class="val">${row.value} ${row.unit}</span> <span class="watts">${row.watts.toFixed(3)}W</span></span>
+            </div>
+          `)}
+        </div>
+      ` : html`<div class="empty-state">No non-zero ANE energy domains in this sample.</div>`}
     </div>
   `;
 }
 
-function Sparkline({ data, color = 'var(--green)' }) {
-  if (!data || data.length < 2) return null;
+function Sparkline({ data, color = 'var(--green)', emptyLabel = 'No recent activity.' }) {
+  if (!data || data.length < 2) return html`<div class="sparkline-empty">${emptyLabel}</div>`;
   const w = 300, h = 28;
-  const max = Math.max(...data, 0.001);
+  const max = Math.max(...data, 0);
+  if (max <= 0.001) return html`<div class="sparkline-empty">${emptyLabel}</div>`;
   const points = data.map((v, i) => {
     const x = (i / (data.length - 1)) * w;
     const y = h - (v / max) * h;
@@ -425,7 +521,7 @@ function Sparkline({ data, color = 'var(--green)' }) {
 
 function ComputeUtilization({ channels }) {
   if (!channels || channels.length === 0) {
-    return html`<div class="section"><h2>Compute Utilization</h2><div class="empty-state">No ANE compute activity.</div></div>`;
+    return null;
   }
   const items = [];
   for (const ch of channels) {
@@ -450,9 +546,10 @@ function ComputeUtilization({ channels }) {
     items.push({ channel: ch.channel, rows, peakName, peakPct, weightedAvg });
   }
   if (items.length === 0) {
-    return html`<div class="section"><h2>Compute Utilization</h2><div class="empty-state">No ANE compute activity.</div></div>`;
+    return null;
   }
   return html`
+    <div class="detail-card">
     <div class="section">
       <h2 title="Fast-Die CE histogram showing ANE compute utilization distribution. Each bucket shows residency at that utilization level. Weighted average gives overall utilization.">Compute Utilization</h2>
       ${items.map(item => html`
@@ -469,55 +566,60 @@ function ComputeUtilization({ channels }) {
         </div>
       `)}
     </div>
+    </div>
   `;
 }
 
-function GPUSection({ powerW, activePct, tempC, history, channels, compact = false }) {
+function GPUSection({ powerW, activePct, tempC, history, channels, energyRows }) {
   const hasChannels = channels && channels.length > 0;
-  if (!hasChannels && powerW <= 0) {
-    return html`<div class="section"><h2>GPU</h2><div class="empty-state">No GPU telemetry.</div></div>`;
-  }
-
+  const activeNow = powerW > 0.05 || activePct > 1;
   const barPct = Math.min(activePct, 100);
   const ps = powerStats(history);
   return html`
     <div class="section">
-      <h2>GPU</h2>
+      <div class="section-head">
+        <div>
+          <h2>GPU</h2>
+          <div class="section-kicker">GPU power and residency</div>
+        </div>
+        <span class="section-status ${activeNow ? 'live' : ''}">${activeNow ? 'live sample' : 'quiet sample'}</span>
+      </div>
       <div title="GPU-related power drawn from IOReport energy counters, including GPU-prefixed domains such as GPU SRAM when available."><span class="power-big" style="color:var(--blue)">${powerW.toFixed(3)}</span><span class="power-unit">W</span></div>
       <div class="metrics-inline">
-        <span>min ${ps.min.toFixed(3)}W</span>
-        <span>avg ${ps.avg.toFixed(3)}W</span>
-        <span>max ${ps.max.toFixed(3)}W</span>
-        ${tempC > 0 ? html`<span>thermal ${tempC.toFixed(1)} C</span>` : null}
+        <span class="metric-chip">min ${ps.min.toFixed(3)}W</span>
+        <span class="metric-chip">avg ${ps.avg.toFixed(3)}W</span>
+        <span class="metric-chip">max ${ps.max.toFixed(3)}W</span>
+        ${tempC > 0 ? html`<span class="metric-chip">thermal ${tempC.toFixed(1)} C</span>` : null}
       </div>
       <div class="compact-note" style="margin-top:6px">GPU Active</div>
       <div class="bar-outer">
         <div class="bar-inner" style="width:${barPct}%;background:var(--blue);opacity:0.6"></div>
         <span class="bar-label">${activePct.toFixed(1)}%</span>
       </div>
-      <${Sparkline} data=${history} color="var(--blue)" />
+      <${Sparkline} data=${history} color="var(--blue)" emptyLabel="No recent GPU draw." />
       ${hasChannels ? html`
         ${channels.map(ch => {
-          let total = 0;
-          for (const s of (ch.states || [])) total += s.residency_ns;
-          if (total === 0) return null;
-          let dominantName = '', dominantPct = 0;
-          const active = [];
-          for (const s of ch.states) {
-            const pct = s.residency_ns / total * 100;
-            const name = s.name.trim();
-            if (pct >= 0.5) active.push({ name, pct });
-            if (pct > dominantPct) { dominantPct = pct; dominantName = name; }
-          }
+          const summary = summarizeStates(ch);
+          if (!summary) return null;
           return html`
             <div class="channel-row">
               <span class="channel-name">${ch.channel}</span>
               <div class="state-chips">
-                ${active.map(s => html`<span class="state-chip ${s.name === dominantName ? 'dominant' : ''}">${s.name} ${Math.round(s.pct)}%</span>`)}
+                ${summary.active.slice(0, 4).map(s => html`<span class="state-chip ${s.name === summary.dominantName ? 'dominant' : ''}">${s.name} ${Math.round(s.pct)}%</span>`)}
               </div>
             </div>
           `;
         })}
+      ` : null}
+      ${energyRows.length > 0 ? html`
+        <div class="energy-grid">
+          ${energyRows.slice(0, 4).map(row => html`
+            <div class="energy-row">
+              <span>${row.name}</span>
+              <span><span class="val">${row.value} ${row.unit}</span> <span class="watts">${row.watts.toFixed(3)}W</span></span>
+            </div>
+          `)}
+        </div>
       ` : null}
     </div>
   `;
@@ -530,22 +632,13 @@ const sectionTooltips = {
 
 function renderStateRows(channels) {
   return channels.map(ch => {
-    let total = 0;
-    for (const s of (ch.states || [])) total += s.residency_ns;
-    if (total === 0) return null;
-    let dominantName = '', dominantPct = 0;
-    const active = [];
-    for (const s of ch.states) {
-      const pct = s.residency_ns / total * 100;
-      const name = s.name.trim();
-      if (pct >= 0.5) active.push({ name, pct });
-      if (pct > dominantPct) { dominantPct = pct; dominantName = name; }
-    }
+    const summary = ch && ch.active ? ch : summarizeStates(ch);
+    if (!summary) return null;
     return html`
       <div class="channel-row">
-        <span class="channel-name">${ch.channel}</span>
+        <span class="channel-name">${summary.channel}</span>
         <div class="state-chips">
-          ${active.map(s => html`<span class="state-chip ${s.name === dominantName ? 'dominant' : ''}">${s.name} ${Math.round(s.pct)}%</span>`)}
+          ${summary.active.slice(0, 4).map(s => html`<span class="state-chip ${s.name === summary.dominantName ? 'dominant' : ''}">${s.name} ${Math.round(s.pct)}%</span>`)}
         </div>
       </div>
     `;
@@ -562,16 +655,17 @@ function hasStateActivity(channels) {
 }
 
 function ANEStatesSection({ voltage, dcsFloor }) {
-  const hasVoltage = hasStateActivity(voltage);
-  const hasDCS = hasStateActivity(dcsFloor);
+  const voltageRows = (voltage || []).map(summarizeStates).filter(Boolean).filter(row => !(row.dominantName === 'VMIN' && row.dominantPct >= 99));
+  const dcsRows = (dcsFloor || []).map(summarizeStates).filter(Boolean).filter(row => !(row.active.length === 1 && row.dominantPct >= 99));
+  if (voltageRows.length === 0 && dcsRows.length === 0) return null;
   return html`
-    <div class="section" title="Voltage and DCS state residency for the ANE. Voltage shows rail level residency; DCS shows memory-frequency demand states.">
+    <div class="detail-card"><div class="section" title="Voltage and DCS state residency for the ANE. Voltage shows rail level residency; DCS shows memory-frequency demand states.">
       <h2>ANE States</h2>
       <div class="compact-note" style="margin-bottom:4px">Voltage</div>
-      ${hasVoltage ? renderStateRows(voltage) : html`<div class="empty-state" style="padding-top:0;padding-bottom:6px">No recent voltage activity.</div>`}
+      ${voltageRows.length > 0 ? renderStateRows(voltageRows) : html`<div class="empty-state" style="padding-top:0;padding-bottom:6px">No recent voltage activity.</div>`}
       <div class="compact-note" style="margin:6px 0 4px;border-top:1px solid var(--border);padding-top:6px">DCS Frequency</div>
-      ${hasDCS ? renderStateRows(dcsFloor) : html`<div class="empty-state" style="padding-top:0">No recent DCS activity.</div>`}
-    </div>
+      ${dcsRows.length > 0 ? renderStateRows(dcsRows) : html`<div class="empty-state" style="padding-top:0">No recent DCS activity.</div>`}
+    </div></div>
   `;
 }
 
@@ -593,62 +687,29 @@ function StateSection({ title, channels }) {
 }
 
 function BandwidthSection({ channels }) {
-  if (!channels || channels.length === 0) {
-    return html`<div class="section" title="Bandwidth shows ANE memory bus utilization across AF, DCS, and SOC-NI subsystems. RD=read, WR=write, RD+WR=combined."><h2>Bandwidth</h2><div class="empty-state">No recent bandwidth activity.</div></div>`;
-  }
-  let hasActivity = false;
-  for (const ch of channels) {
-    let total = 0;
-    for (const s of (ch.states || [])) total += s.residency_ns;
-    if (total > 0) { hasActivity = true; break; }
-  }
-  if (!hasActivity) {
-    return html`<div class="section" title="Bandwidth shows ANE memory bus utilization across AF, DCS, and SOC-NI subsystems. RD=read, WR=write, RD+WR=combined."><h2>Bandwidth</h2><div class="empty-state">No recent bandwidth activity.</div></div>`;
-  }
-
-  // Group by subgroup.
-  const groups = [];
-  const seen = {};
-  for (const ch of channels) {
-    const sg = ch.subgroup || '';
-    if (!(sg in seen)) { seen[sg] = groups.length; groups.push({ name: sg, channels: [] }); }
-    groups[seen[sg]].channels.push(ch);
-  }
+  const rows = (channels || [])
+    .map(summarizeBandwidthChannel)
+    .filter(Boolean)
+    .filter(item => item.avgGBps >= item.minTier + 0.5 || item.dominantPct < 95)
+    .sort((a, b) => b.avgGBps - a.avgGBps || a.channel.localeCompare(b.channel));
+  if (rows.length === 0) return null;
 
   return html`
-    <div class="section" title="Bandwidth shows ANE memory bus utilization across AF, DCS, and SOC-NI subsystems. RD=read, WR=write, RD+WR=combined.">
+    <div class="detail-card span-2"><div class="section" title="Bandwidth shows ANE memory bus utilization across AF, DCS, and SOC-NI subsystems. RD=read, WR=write, RD+WR=combined.">
       <h2>Bandwidth</h2>
-      <div class="compact-note" style="margin-bottom:4px">tiers detected from live IOReport state labels</div>
-      <div class="scroll-region">
-      ${groups.map(g => html`
-        ${groups.length > 1 && g.name ? html`<div style="font-size:11px;color:var(--dim);margin:6px 0 2px;border-bottom:1px solid var(--border);padding-bottom:2px">${g.name}</div>` : null}
-        <div class="bandwidth-scroll">
-        <div class="bandwidth-table">
-          <div class="bandwidth-head">
-            <span>channel</span>
-            <span>floor</span>
-            <span>dominant</span>
-            <span>max</span>
-            <span style="text-align:right">avg</span>
+      <div class="bandwidth-grid">
+      ${rows.slice(0, 8).map(item => html`
+        <div class="bandwidth-item">
+          <div class="bandwidth-group">${item.subgroup || 'bandwidth'}</div>
+          <div class="bandwidth-desc">
+            <div class="bandwidth-name">${item.channel}</div>
+            <div class="bandwidth-meta">floor ${item.minTier.toFixed(0)}GB/s · dominant ${item.dominantName} ${item.dominantPct.toFixed(0)}% · peak ${item.maxTier.toFixed(0)}GB/s</div>
           </div>
-          ${g.channels
-            .map(summarizeBandwidthChannel)
-            .filter(Boolean)
-            .sort((a, b) => a.channel.localeCompare(b.channel))
-            .map(item => html`
-              <div class="bandwidth-line">
-                <span class="bw-name">${item.channel}</span>
-                <span class="bandwidth-tier">${item.minTier.toFixed(0)}GB/s</span>
-                <span class="bandwidth-dom">${item.dominantName} <span class="bw-pct">${item.dominantPct.toFixed(0)}%</span></span>
-                <span class="bandwidth-tier">${item.maxTier.toFixed(0)}GB/s</span>
-                <span class="bandwidth-avg">${item.avgGBps.toFixed(1)}GB/s</span>
-              </div>
-            `)}
-        </div>
+          <div class="bandwidth-avg">${item.avgGBps.toFixed(1)}GB/s</div>
         </div>
       `)}
       </div>
-    </div>
+    </div></div>
   `;
 }
 
@@ -698,38 +759,37 @@ function ThrottleOverviewSection({ throttle, throttleDetail, durationMs }) {
   const activeEvents = (throttle || []).filter(ch => ch.value > 0);
   const detail = summarizeThrottleDetail(throttleDetail);
   const activeDetail = detail.filter(item => item.actPct > 0);
+  if (activeEvents.length === 0 && activeDetail.length === 0) return null;
   const durSec = (durationMs || 1000) / 1000;
   let totalThrottles = 0;
   for (const ch of activeEvents) totalThrottles += ch.value;
   const rate = durSec > 0 ? totalThrottles / durSec : 0;
 
   return html`
-    <div class="section" title="Throttle counters and per-reason residency.">
-      <h2 style="color:${activeEvents.length > 0 || activeDetail.length > 0 ? 'var(--yellow)' : 'var(--dim)'}">Throttle</h2>
-      ${activeEvents.length === 0 && activeDetail.length === 0 ? html`
-        <div class="empty-state">No throttle events or active throttle reasons.</div>
-      ` : html`
-        ${activeEvents.length > 0 ? html`
-          <div class="metrics-inline" style="margin-top:0;margin-bottom:6px">
-            <span>events ${totalThrottles}</span>
-            <span>rate ${rate.toFixed(1)}/s</span>
+    <div class="detail-card"><div class="section" title="Throttle counters and per-reason residency.">
+      <h2 style="color:var(--yellow)">Throttle</h2>
+      ${activeEvents.length > 0 ? html`
+        <div class="metrics-inline" style="margin-top:0;margin-bottom:6px">
+          <span class="metric-chip">events ${totalThrottles}</span>
+          <span class="metric-chip">rate ${rate.toFixed(1)}/s</span>
+        </div>
+        ${activeEvents.slice(0, 4).map(ch => html`
+          <div class="energy-row">
+            <span>${ch.channel}</span>
+            <span class="throttle-alert">${ch.value} ${ch.unit}</span>
           </div>
-          ${activeEvents.slice(0, 4).map(ch => html`
-            <div class="energy-row">
-              <span>${ch.channel}</span>
-              <span class="throttle-alert">${ch.value} ${ch.unit}</span>
-            </div>
-          `)}
-        ` : html`<div class="empty-state" style="padding-top:0;padding-bottom:6px">No event counters.</div>`}
+        `)}
+      ` : null}
+      ${activeDetail.length > 0 ? html`
         <div class="compact-note" style="margin:6px 0 4px;border-top:1px solid var(--border);padding-top:6px">Reason Activity</div>
-        ${activeDetail.length > 0 ? activeDetail.slice(0, 6).map(item => html`
+        ${activeDetail.slice(0, 6).map(item => html`
           <div class="energy-row">
             <span>${item.name}</span>
             <span class="throttle-alert">ACT ${item.actPct.toFixed(1)}%</span>
           </div>
-        `) : html`<div class="empty-state" style="padding-top:0">No active throttle reasons.</div>`}
-      `}
-    </div>
+        `)}
+      ` : null}
+    </div></div>
   `;
 }
 
@@ -808,11 +868,11 @@ function ThrottleDetailSection({ channels }) {
 
 function CounterTable({ channels, durationMs }) {
   if (!channels || channels.length === 0) {
-    return html`<div class="section"><h2>Counters</h2><div class="empty-state">No interrupt counters.</div></div>`;
+    return null;
   }
   const active = channels.filter(ch => Number.isFinite(ch.value) && ch.value !== 0);
   if (active.length === 0) {
-    return html`<div class="section"><h2>Counters</h2><div class="empty-state">No interrupt counters.</div></div>`;
+    return null;
   }
   const durSec = (durationMs || 1000) / 1000;
 
@@ -820,6 +880,7 @@ function CounterTable({ channels, durationMs }) {
   const timeChs = active.filter(ch => ch.channel.includes('(MATUs)') || (ch.unit && ch.unit.includes('MATU')));
 
   return html`
+    <div class="wide-card">
     ${countChs.length > 0 ? html`
       <div class="section" title="Counters show interrupt and handler invocation counts. Handler Count = number of times the ANE interrupt handler ran. Rate (/s) shows frequency.">
         <h2>Counters</h2>
@@ -852,6 +913,7 @@ function CounterTable({ channels, durationMs }) {
         </div>
       </div>
     ` : null}
+    </div>
   `;
 }
 
