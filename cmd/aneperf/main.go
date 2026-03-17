@@ -92,6 +92,11 @@ var bandwidthHistory = newChannelStateWindow(4)
 const historyLen = 38
 const maxRenderedStates = 4
 
+type statePct struct {
+	name string
+	pct  float64
+}
+
 func runLive(sampler *aneperf.Sampler, interval time.Duration) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
@@ -189,20 +194,44 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	}
 
 	// Energy value.
-	haveEnergy := false
+	type energyRow struct {
+		channel string
+		unit    string
+		value   int64
+		watts   float64
+	}
+	var energyRows []energyRow
 	for _, ch := range cat.Energy {
 		if ch.Value == 0 {
 			continue
 		}
-		haveEnergy = true
 		watts := energyValueToWatts(ch.Value, ch.Unit, interval)
-		fmt.Printf("  %s%-20s%s %s%5d %s%s %s(%.3fW)%s\n",
-			ansiWhite, ch.Channel, ansiReset,
-			ansiWhite, ch.Value, ch.Unit, ansiReset,
-			ansiDim, watts, ansiReset)
+		energyRows = append(energyRows, energyRow{
+			channel: ch.Channel,
+			unit:    ch.Unit,
+			value:   ch.Value,
+			watts:   watts,
+		})
 	}
-	if !haveEnergy {
+	sort.Slice(energyRows, func(i, j int) bool {
+		if energyRows[i].watts == energyRows[j].watts {
+			return energyRows[i].channel < energyRows[j].channel
+		}
+		return energyRows[i].watts > energyRows[j].watts
+	})
+	if len(energyRows) == 0 {
 		fmt.Printf("  %sno non-zero energy deltas%s\n", ansiDim, ansiReset)
+	} else {
+		limit := min(len(energyRows), 4)
+		for _, row := range energyRows[:limit] {
+			fmt.Printf("  %s%-20s%s %s%5d %s%s %s(%.3fW)%s\n",
+				ansiWhite, row.channel, ansiReset,
+				ansiWhite, row.value, row.unit, ansiReset,
+				ansiDim, row.watts, ansiReset)
+		}
+		if len(energyRows) > limit {
+			fmt.Printf("  %s+%d more energy channels%s\n", ansiDim, len(energyRows)-limit, ansiReset)
+		}
 	}
 	fmt.Println()
 
@@ -400,24 +429,7 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 	if len(channels) == 0 {
 		return
 	}
-
-	// Check if any channel has activity.
-	hasActivity := false
-	for _, ch := range channels {
-		var total int64
-		for _, s := range ch.States {
-			total += s.Residency
-		}
-		if total > 0 {
-			hasActivity = true
-			break
-		}
-	}
-	if !hasActivity {
-		return
-	}
-
-	fmt.Printf("%s╸ %s%s\n", ansiBold, title, ansiReset)
+	var lines []string
 	for _, ch := range channels {
 		var total int64
 		for _, s := range ch.States {
@@ -428,18 +440,14 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 		}
 
 		// Collect states >0.5%.
-		type sp struct {
-			name string
-			pct  float64
-		}
-		var active []sp
+		var active []statePct
 		dominantName := ""
 		dominantPct := 0.0
 		for _, s := range ch.States {
 			pct := float64(s.Residency) / float64(total) * 100
 			name := strings.TrimSpace(s.Name)
 			if pct >= 0.5 {
-				active = append(active, sp{name, pct})
+				active = append(active, statePct{name, pct})
 			}
 			if pct > dominantPct {
 				dominantPct = pct
@@ -453,19 +461,30 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 			return active[i].pct > active[j].pct
 		})
 
-		fmt.Printf("  %-22s", ch.Channel)
+		if !stateSectionInteresting(title, active, dominantName, dominantPct) {
+			continue
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "  %-22s", ch.Channel)
 		limit := min(len(active), maxRenderedStates)
 		for _, s := range active[:limit] {
 			color := otherColor
 			if s.name == dominantName {
 				color = dominantColor
 			}
-			fmt.Printf("  %s%s%s %.0f%%", color, s.name, ansiReset, s.pct)
+			fmt.Fprintf(&b, "  %s%s%s %.0f%%", color, s.name, ansiReset, s.pct)
 		}
 		if len(active) > limit {
-			fmt.Printf("  %s+%d%s", ansiDim, len(active)-limit, ansiReset)
+			fmt.Fprintf(&b, "  %s+%d%s", ansiDim, len(active)-limit, ansiReset)
 		}
-		fmt.Println()
+		lines = append(lines, b.String())
+	}
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Printf("%s╸ %s%s\n", ansiBold, title, ansiReset)
+	for _, line := range lines {
+		fmt.Println(line)
 	}
 	fmt.Println()
 }
@@ -491,60 +510,48 @@ func printBandwidth(channels []aneperf.Channel) {
 		return
 	}
 
-	// Group channels by SubGroup.
-	type subgroupEntry struct {
-		name     string
-		channels []aneperf.Channel
+	type bandwidthRow struct {
+		group   string
+		channel string
+		summary bandwidthSummary
 	}
-	var groups []subgroupEntry
-	seen := map[string]int{}
+	var rows []bandwidthRow
 	for _, ch := range channels {
-		idx, ok := seen[ch.SubGroup]
-		if !ok {
-			idx = len(groups)
-			seen[ch.SubGroup] = idx
-			groups = append(groups, subgroupEntry{name: ch.SubGroup})
-		}
-		groups[idx].channels = append(groups[idx].channels, ch)
-	}
-
-	fmt.Printf("%s╸ Bandwidth%s\n", ansiBold, ansiReset)
-	fmt.Printf("  %stiers detected from live IOReport state labels%s\n", ansiDim, ansiReset)
-	for _, g := range groups {
-		type bandwidthRow struct {
-			channel string
-			summary bandwidthSummary
-		}
-		var rows []bandwidthRow
-		for _, ch := range g.channels {
-			summary, ok := summarizeBandwidth(ch)
-			if !ok || !summary.isInteresting() {
-				continue
-			}
-			rows = append(rows, bandwidthRow{channel: ch.Channel, summary: summary})
-		}
-		if len(rows) == 0 {
+		summary, ok := summarizeBandwidth(ch)
+		if !ok || !summary.isInteresting() {
 			continue
 		}
-		sort.Slice(rows, func(i, j int) bool {
-			if rows[i].summary.AvgGBps == rows[j].summary.AvgGBps {
+		rows = append(rows, bandwidthRow{
+			group:   ch.SubGroup,
+			channel: ch.Channel,
+			summary: summary,
+		})
+	}
+	if len(rows) == 0 {
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].summary.AvgGBps == rows[j].summary.AvgGBps {
+			if rows[i].group == rows[j].group {
 				return rows[i].channel < rows[j].channel
 			}
-			return rows[i].summary.AvgGBps > rows[j].summary.AvgGBps
-		})
-		if len(groups) > 1 && g.name != "" {
-			fmt.Printf("  %s— %s —%s\n", ansiDim, g.name, ansiReset)
+			return rows[i].group < rows[j].group
 		}
-		fmt.Printf("  %-22s  %6s  %-14s  %6s  %7s\n", "channel", "floor", "dominant", "max", "avg")
-		for _, row := range rows {
-			summary := row.summary
-			fmt.Printf("  %-22s  %s%4.0fGB/s%s  %s%-8s%s %4.0f%%  %s%4.0fGB/s%s  %s%5.1fGB/s%s\n",
-				row.channel,
-				ansiDim, summary.MinGBps, ansiReset,
-				ansiCyan, summary.DominantName, ansiReset, summary.DominantPct,
-				ansiDim, summary.MaxGBps, ansiReset,
-				ansiCyan, summary.AvgGBps, ansiReset)
-		}
+		return rows[i].summary.AvgGBps > rows[j].summary.AvgGBps
+	})
+
+	fmt.Printf("%s╸ Bandwidth%s\n", ansiBold, ansiReset)
+	limit := min(len(rows), 8)
+	for _, row := range rows[:limit] {
+		fmt.Printf("  %s%-14s%s  %-18s  %s%5.1fGB/s%s avg  %s%-6s%s %3.0f%%  %speak %4.0fGB/s%s\n",
+			ansiDim, row.group, ansiReset,
+			row.channel,
+			ansiCyan, row.summary.AvgGBps, ansiReset,
+			ansiWhite, row.summary.DominantName, ansiReset, row.summary.DominantPct,
+			ansiDim, row.summary.MaxGBps, ansiReset)
+	}
+	if len(rows) > limit {
+		fmt.Printf("  %s+%d more bandwidth channels%s\n", ansiDim, len(rows)-limit, ansiReset)
 	}
 	fmt.Println()
 }
@@ -651,27 +658,27 @@ func printCounters(channels []aneperf.Channel, dur time.Duration) {
 	durSec := dur.Seconds()
 
 	if len(countChs) > 0 {
-		fmt.Printf("%s╸ Counters%s %40s %s\n", ansiBold, ansiReset, "count", "/s")
+		fmt.Printf("%s╸ Counters%s\n", ansiBold, ansiReset)
 		for _, ch := range countChs {
 			rate := 0.0
 			if durSec > 0 {
 				rate = float64(ch.Value) / durSec
 			}
-			fmt.Printf("  %50s %s%8d%s %s%6.1f%s\n",
-				ch.Channel, ansiYellow, ch.Value, ansiReset, ansiDim, rate, ansiReset)
+			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s\n",
+				shortCounterName(ch.Channel), ansiYellow, ch.Value, ansiReset, ansiDim, rate, ansiReset)
 		}
 		fmt.Println()
 	}
 
 	if len(timeChs) > 0 {
-		fmt.Printf("%s╸ Handler Time (MATUs)%s %28s %s\n", ansiBold, ansiReset, "time", "/s")
+		fmt.Printf("%s╸ Handler Time (MATUs)%s\n", ansiBold, ansiReset)
 		for _, ch := range timeChs {
 			rate := 0.0
 			if durSec > 0 {
 				rate = float64(ch.Value) / durSec
 			}
-			fmt.Printf("  %50s %s%8d%s %s%6.1f%s\n",
-				ch.Channel, ansiDim, ch.Value, ansiReset, ansiDim, rate, ansiReset)
+			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s\n",
+				shortCounterName(ch.Channel), ansiDim, ch.Value, ansiReset, ansiDim, rate, ansiReset)
 		}
 		fmt.Println()
 	}
@@ -728,12 +735,10 @@ func printThrottleDetail(channels []aneperf.Channel) {
 		}
 	}
 
-	fmt.Printf("%s╸ Throttle Detail%s\n", ansiBold, ansiReset)
 	if !anyActive {
-		fmt.Printf("  %sno active throttles%s\n", ansiDim, ansiReset)
-		fmt.Println()
 		return
 	}
+	fmt.Printf("%s╸ Throttle Detail%s\n", ansiBold, ansiReset)
 
 	for _, ch := range channels {
 		if len(ch.States) == 0 {
@@ -747,16 +752,12 @@ func printThrottleDetail(channels []aneperf.Channel) {
 			continue
 		}
 
-		type sp struct {
-			name string
-			pct  float64
-		}
-		var active []sp
+		var active []statePct
 		for _, s := range ch.States {
 			pct := float64(s.Residency) / float64(total) * 100
 			name := strings.TrimSpace(s.Name)
 			if pct >= 0.5 {
-				active = append(active, sp{name, pct})
+				active = append(active, statePct{name, pct})
 			}
 		}
 		// Show channels where ACT > 0, or all if none active.
@@ -805,6 +806,34 @@ func powerStats(history []float64) (min, avg, max float64) {
 
 func hasGPUInfo(d aneperf.Delta, channels []aneperf.Channel) bool {
 	return d.GPUPowerW > 0 || d.GPUActivePct > 0 || len(channels) > 0
+}
+
+func stateSectionInteresting(title string, active []statePct, dominantName string, dominantPct float64) bool {
+	switch title {
+	case "Voltage States":
+		return !(dominantName == "VMIN" && dominantPct >= 99)
+	case "DCS Frequency":
+		return !(dominantPct >= 99 && len(active) == 1)
+	default:
+		return true
+	}
+}
+
+func shortCounterName(name string) string {
+	switch {
+	case strings.Contains(name, "First Level Interrupt Handler Count"):
+		return "first-level count"
+	case strings.Contains(name, "Second Level Interrupt Handler Count"):
+		return "second-level count"
+	case strings.Contains(name, "First Level Interrupt Handler Time"):
+		return "first-level time"
+	case strings.Contains(name, "Second Level Interrupt Handler CPU Time"):
+		return "second-level cpu"
+	case strings.Contains(name, "Second Level Interrupt Handler System Time"):
+		return "second-level sys"
+	default:
+		return name
+	}
 }
 
 func enterLiveScreen() {
