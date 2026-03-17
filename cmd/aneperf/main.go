@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"time"
 
@@ -79,6 +78,7 @@ func runOnce(sampler *aneperf.Sampler, interval time.Duration) error {
 }
 
 var powerHistory []float64
+var gpuPowerHistory []float64
 
 const historyLen = 38
 
@@ -102,19 +102,23 @@ func runLive(sampler *aneperf.Sampler, interval time.Duration) error {
 		snap = sampler.Start()
 
 		powerHistory = append(powerHistory, delta.PowerW)
+		gpuPowerHistory = append(gpuPowerHistory, delta.GPUPowerW)
 		if len(powerHistory) > historyLen {
 			powerHistory = powerHistory[len(powerHistory)-historyLen:]
+		}
+		if len(gpuPowerHistory) > historyLen {
+			gpuPowerHistory = gpuPowerHistory[len(gpuPowerHistory)-historyLen:]
 		}
 
 		printLive(delta, interval)
 	}
 }
 
-
 func printLive(d aneperf.Delta, interval time.Duration) {
 	fmt.Print("\033[2J\033[H")
 
 	cat := aneperf.ClassifyChannels(d.Channels)
+	stats := aneperf.ComputeStats(d)
 
 	// Header.
 	fmt.Printf("%s aneperf %s%s— %s  (every %s, measured %.3fs)%s\n",
@@ -142,15 +146,25 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	fmt.Printf("%s╸ Power%s\n", ansiBold, ansiReset)
 	fmt.Printf("  ANE Power:  %s%.3f W%s    %smin %.3f  avg %.3f  max %.3f%s\n",
 		ansiGreenBld, d.PowerW, ansiReset, ansiDim, pMin, pAvg, pMax, ansiReset)
+	if hasGPUInfo(d, cat.GPUStats) {
+		gMin, gAvg, gMax := powerStats(gpuPowerHistory)
+		fmt.Printf("  GPU Power:  %s%.3f W%s    %smin %.3f  avg %.3f  max %.3f%s\n",
+			ansiBlue, d.GPUPowerW, ansiReset, ansiDim, gMin, gAvg, gMax, ansiReset)
+		if d.GPUTempC > 0 {
+			fmt.Printf("  GPU Temp:   %s%.1f C%s\n", ansiBlue, d.GPUTempC, ansiReset)
+		}
+	}
 
 	// Active percentage — prefer Fast-Die CE histogram if available.
-	activePct := computeActivePctFromCE(cat.ComputeEn)
-	if activePct == 0 {
-		activePct = computeActivePctFromVoltage(cat.Voltage)
+	fmt.Printf("  ANE Active: %s\n", activeBar(stats.ActivePct, 30))
+	if hasGPUInfo(d, cat.GPUStats) {
+		fmt.Printf("  GPU Active: %s\n", activeBar(stats.GPUActivePct, 30))
 	}
-	fmt.Printf("  ANE Active: %s\n", activeBar(activePct, 30))
 
 	fmt.Printf("  %s  History:    %s%s\n", ansiDim, sparkline(powerHistory), ansiReset)
+	if hasGPUInfo(d, cat.GPUStats) {
+		fmt.Printf("  %s  GPU Hist:   %s%s\n", ansiDim, sparkline(gpuPowerHistory), ansiReset)
+	}
 
 	// Energy value.
 	for _, ch := range cat.Energy {
@@ -169,8 +183,8 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	fmt.Println()
 
 	// Compute utilization histogram.
-	stats := aneperf.ComputeStats(d)
 	printComputeUtilization(cat.ComputeEn, stats)
+	printGPUStats(cat.GPUStats)
 
 	// Voltage states.
 	printStateSection("Voltage States", cat.Voltage, ansiBlue, ansiGreen)
@@ -246,7 +260,7 @@ func computeActivePctFromVoltage(channels []aneperf.Channel) float64 {
 }
 
 func energyValueToWatts(value int64, unit string, interval time.Duration) float64 {
-	ms := float64(interval.Milliseconds())
+	ms := float64(interval) / float64(time.Millisecond)
 	if ms <= 0 {
 		ms = 1000
 	}
@@ -348,6 +362,13 @@ func printComputeUtilization(channels []aneperf.Channel, stats aneperf.DeltaStat
 		}
 		fmt.Println()
 	}
+}
+
+func printGPUStats(channels []aneperf.Channel) {
+	if len(channels) == 0 {
+		return
+	}
+	printStateSection("GPU States", channels, ansiBlue, ansiCyan)
 }
 
 // printStateSection prints voltage or DCS floor state channels.
@@ -454,48 +475,85 @@ func printBandwidth(channels []aneperf.Channel) {
 	}
 
 	fmt.Printf("%s╸ Bandwidth%s\n", ansiBold, ansiReset)
+	fmt.Printf("  %stiers detected from live IOReport state labels%s\n", ansiDim, ansiReset)
 	for _, g := range groups {
 		if len(groups) > 1 && g.name != "" {
 			fmt.Printf("  %s— %s —%s\n", ansiDim, g.name, ansiReset)
 		}
+		fmt.Printf("  %-22s  %6s  %-14s  %6s  %7s\n", "channel", "floor", "dominant", "max", "avg")
 		for _, ch := range g.channels {
-			var total int64
-			for _, s := range ch.States {
-				total += s.Residency
-			}
-			if total == 0 {
+			summary, ok := summarizeBandwidth(ch)
+			if !ok {
 				continue
 			}
-
-			type sp struct {
-				name string
-				pct  float64
-			}
-			var active []sp
-			for _, s := range ch.States {
-				pct := float64(s.Residency) / float64(total) * 100
-				if pct >= 0.5 {
-					active = append(active, sp{strings.TrimSpace(s.Name), pct})
-				}
-			}
-			if len(active) == 0 {
-				continue
-			}
-
-			sort.Slice(active, func(i, j int) bool { return active[i].pct > active[j].pct })
-
-			shown := min(len(active), 5)
-			fmt.Printf("  %-22s", ch.Channel)
-			for _, s := range active[:shown] {
-				fmt.Printf("  %s%s%s %.0f%%", ansiCyan, s.name, ansiReset, s.pct)
-			}
-			if len(active) > shown {
-				fmt.Printf("  %s+%d more%s", ansiDim, len(active)-shown, ansiReset)
-			}
-			fmt.Println()
+			fmt.Printf("  %-22s  %s%4.0fGB/s%s  %s%-8s%s %4.0f%%  %s%4.0fGB/s%s  %s%5.1fGB/s%s\n",
+				ch.Channel,
+				ansiDim, summary.MinGBps, ansiReset,
+				ansiCyan, summary.DominantName, ansiReset, summary.DominantPct,
+				ansiDim, summary.MaxGBps, ansiReset,
+				ansiCyan, summary.AvgGBps, ansiReset)
 		}
 	}
 	fmt.Println()
+}
+
+type bandwidthSummary struct {
+	MinGBps      float64
+	DominantName string
+	DominantPct  float64
+	MaxGBps      float64
+	AvgGBps      float64
+}
+
+func summarizeBandwidth(ch aneperf.Channel) (bandwidthSummary, bool) {
+	var total int64
+	var weighted float64
+	dominantName := ""
+	dominantRes := int64(-1)
+	maxTier := 0.0
+	minTier := 0.0
+	haveTier := false
+
+	for _, s := range ch.States {
+		res := s.Residency
+		tier := parseBandwidthGBps(strings.TrimSpace(s.Name))
+		total += res
+		weighted += tier * float64(res)
+		if res > dominantRes {
+			dominantRes = res
+			dominantName = strings.TrimSpace(s.Name)
+		}
+		if tier > 0 {
+			if !haveTier || tier < minTier {
+				minTier = tier
+			}
+			if tier > maxTier {
+				maxTier = tier
+			}
+			haveTier = true
+		}
+	}
+	if total == 0 || !haveTier {
+		return bandwidthSummary{}, false
+	}
+	return bandwidthSummary{
+		MinGBps:      minTier,
+		DominantName: dominantName,
+		DominantPct:  float64(dominantRes) / float64(total) * 100,
+		MaxGBps:      maxTier,
+		AvgGBps:      weighted / float64(total),
+	}, true
+}
+
+func parseBandwidthGBps(name string) float64 {
+	var gbps float64
+	if _, err := fmt.Sscanf(name, "%fGB/s", &gbps); err == nil {
+		return gbps
+	}
+	if _, err := fmt.Sscanf(name, "%f GB/s", &gbps); err == nil {
+		return gbps
+	}
+	return 0
 }
 
 // printThrottle prints throttle event counters.
@@ -687,4 +745,8 @@ func powerStats(history []float64) (min, avg, max float64) {
 	}
 	avg = sum / float64(len(history))
 	return min, avg, max
+}
+
+func hasGPUInfo(d aneperf.Delta, channels []aneperf.Channel) bool {
+	return d.GPUPowerW > 0 || d.GPUActivePct > 0 || len(channels) > 0
 }
