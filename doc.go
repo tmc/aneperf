@@ -19,6 +19,7 @@
 //		log.Fatal(err)
 //	}
 //	fmt.Printf("ANE Power: %.3f W\n", sample.ANEPowerW)
+//	fmt.Printf("ANE Utilization: %.1f%%\n", sample.ANEUtilizationPct)
 //
 // # Benchmark Integration
 //

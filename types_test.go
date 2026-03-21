@@ -1,6 +1,7 @@
 package aneperf
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -174,5 +175,47 @@ func TestContainsANE(t *testing.T) {
 				t.Errorf("containsANE(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSampleJSONIncludesUtilizationFields(t *testing.T) {
+	sample := Sample{}
+
+	data, err := json.Marshal(sample)
+	if err != nil {
+		t.Fatalf("json.Marshal(Sample{}): %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal(sample): %v", err)
+	}
+
+	if _, ok := got["ane_utilization_pct"]; !ok {
+		t.Fatal("sample json missing ane_utilization_pct")
+	}
+	if _, ok := got["ane_cluster_active_pct"]; !ok {
+		t.Fatal("sample json missing ane_cluster_active_pct")
+	}
+}
+
+func TestDeltaJSONIncludesUtilizationFields(t *testing.T) {
+	delta := Delta{}
+
+	data, err := json.Marshal(delta)
+	if err != nil {
+		t.Fatalf("json.Marshal(Delta{}): %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal(delta): %v", err)
+	}
+
+	if _, ok := got["ane_utilization_pct"]; !ok {
+		t.Fatal("delta json missing ane_utilization_pct")
+	}
+	if _, ok := got["ane_cluster_active_pct"]; !ok {
+		t.Fatal("delta json missing ane_cluster_active_pct")
 	}
 }

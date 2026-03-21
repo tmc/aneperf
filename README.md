@@ -28,6 +28,10 @@ Single JSON sample:
 aneperf --json
 ```
 
+The JSON output includes derived top-level utilization fields:
+`ane_utilization_pct` for compute utilization and
+`ane_cluster_active_pct` for cluster power residency.
+
 Custom sample interval:
 
 ```
@@ -60,6 +64,7 @@ defer sampler.Close()
 // One-shot sample.
 sample, err := sampler.Sample(time.Second)
 fmt.Printf("ANE Power: %.3f W\n", sample.ANEPowerW)
+fmt.Printf("ANE Utilization: %.1f%%\n", sample.ANEUtilizationPct)
 
 // Start/Stop for precise measurement windows.
 snap := sampler.Start()

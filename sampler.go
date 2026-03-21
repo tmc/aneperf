@@ -73,16 +73,18 @@ func (s *Sampler) Stop(snap Snapshot) Delta {
 	channels := filterMonitoredChannels(extractChannels(delta))
 	power := computeANEPower(channels, durationMilliseconds(duration))
 	gpuPower := computeGPUPower(channels, durationMilliseconds(duration))
-	gpuActive := computeGPUActivePct(ClassifyChannels(channels).GPUStats)
+	stats := ComputeStats(Delta{Duration: duration, Channels: channels})
 
 	return Delta{
-		Duration:     duration,
-		Device:       dev,
-		PowerW:       power,
-		GPUPowerW:    gpuPower,
-		GPUActivePct: gpuActive,
-		GPUTempC:     gpuTemp,
-		Channels:     channels,
+		Duration:            duration,
+		Device:              dev,
+		PowerW:              power,
+		ANEUtilizationPct:   stats.ActivePct,
+		ANEClusterActivePct: stats.ClusterActivePct,
+		GPUPowerW:           gpuPower,
+		GPUActivePct:        stats.GPUActivePct,
+		GPUTempC:            gpuTemp,
+		Channels:            channels,
 	}
 }
 
@@ -123,16 +125,18 @@ func (s *Sampler) Sample(interval time.Duration) (Sample, error) {
 	channels := filterMonitoredChannels(extractChannels(delta))
 	power := computeANEPower(channels, durationMilliseconds(interval))
 	gpuPower := computeGPUPower(channels, durationMilliseconds(interval))
-	gpuActive := computeGPUActivePct(ClassifyChannels(channels).GPUStats)
+	stats := ComputeStats(Delta{Duration: interval, Channels: channels})
 
 	return Sample{
-		Timestamp:    time.Now(),
-		Device:       dev,
-		ANEPowerW:    power,
-		GPUPowerW:    gpuPower,
-		GPUActivePct: gpuActive,
-		GPUTempC:     gpuTemp,
-		Channels:     channels,
+		Timestamp:           time.Now(),
+		Device:              dev,
+		ANEPowerW:           power,
+		ANEUtilizationPct:   stats.ActivePct,
+		ANEClusterActivePct: stats.ClusterActivePct,
+		GPUPowerW:           gpuPower,
+		GPUActivePct:        stats.GPUActivePct,
+		GPUTempC:            gpuTemp,
+		Channels:            channels,
 	}, nil
 }
 
