@@ -25,6 +25,7 @@ body {
   padding: 14px;
   max-width: 1360px;
   margin: 0 auto;
+  font-variant-numeric: tabular-nums;
 }
 h1 { font-size: 14px; color: var(--cyan); font-weight: 600; }
 h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
@@ -56,9 +57,10 @@ h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; bo
   border-radius: 8px;
   padding: 10px 12px;
   min-width: 0;
+  min-height: 60px;
 }
 
-.power-big { font-size: 22px; font-weight: 700; color: var(--green); }
+.power-big { font-size: 22px; font-weight: 700; color: var(--green); font-variant-numeric: tabular-nums; }
 .power-unit { font-size: 12px; color: var(--dim); margin-left: 4px; }
 .metrics-inline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--dim); }
 .metric-chip {
@@ -81,7 +83,7 @@ h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; bo
 .bar-inner { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
 .bar-label { position: absolute; right: 6px; top: 0; line-height: 14px; font-size: 10px; color: var(--fg); }
 
-.sparkline { margin: 4px 0; }
+.sparkline { margin: 4px 0; min-height: 28px; }
 .sparkline svg { display: block; width: 100%; height: 28px; }
 .sparkline-empty { min-height: 28px; display: flex; align-items: center; color: var(--dim); font-size: 11px; }
 
@@ -103,8 +105,8 @@ h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; bo
 .channel-row { display: flex; align-items: baseline; gap: 6px; margin: 2px 0; font-size: 11px; flex-wrap: wrap; }
 .channel-name { color: var(--fg); min-width: 110px; }
 
-.counter-table { width: 100%; font-size: 11px; }
-.counter-table td { padding: 1px 6px; }
+.counter-table { width: 100%; font-size: 11px; table-layout: fixed; }
+.counter-table td, .counter-table th { padding: 1px 6px; }
 .counter-table td:first-child { color: var(--dim); text-align: left; }
 .counter-table td:last-child { color: var(--yellow); }
 
@@ -120,7 +122,7 @@ h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; padding-bottom: 4px; bo
 .bandwidth-line { display: grid; grid-template-columns: minmax(120px, 1.5fr) 52px minmax(76px, 1fr) 52px 64px; gap: 6px; align-items: center; font-size: 11px; }
 .bandwidth-head { color: var(--dim); padding-bottom: 2px; border-bottom: 1px solid var(--border); }
 .bandwidth-line { padding: 1px 0; }
-.bandwidth-avg { color: var(--cyan); text-align: right; white-space: nowrap; }
+.bandwidth-avg { color: var(--cyan); text-align: right; white-space: nowrap; min-width: 72px; }
 .bandwidth-tier { white-space: nowrap; }
 .bandwidth-dom { color: var(--fg); white-space: nowrap; }
 .scroll-region { max-height: 240px; overflow: auto; padding-right: 4px; }
@@ -367,6 +369,11 @@ function App() {
   const [device, setDevice] = useState(null);
   const historyRef = useRef([]);
   const gpuHistoryRef = useRef([]);
+  const bwHistoryRef = useRef({});
+  const voltageHistoryRef = useRef({});
+  const counterHistoryRef = useRef({});
+  const handlerTimeHistoryRef = useRef({});
+  const throttleHistoryRef = useRef([]);
 
   useEffect(() => {
     fetch('/api/device').then(r => r.json()).then(setDevice).catch(() => {});
@@ -384,6 +391,55 @@ function App() {
       const gh = gpuHistoryRef.current;
       gh.push(d.gpu_power_watts || 0);
       if (gh.length > HISTORY_LEN) gh.splice(0, gh.length - HISTORY_LEN);
+
+      // Track per-channel histories for bandwidth, voltage, counters, handler time, throttle.
+      // Always record (even zero) so past activity remains visible when idle.
+      const cat = classifyChannels(d.channels);
+      const durSec = d.duration ? d.duration / 1e6 / 1000 : 1;
+
+      function pushHistory(ref, key, val) {
+        if (!ref[key]) ref[key] = [];
+        ref[key].push(val);
+        if (ref[key].length > HISTORY_LEN) ref[key].splice(0, ref[key].length - HISTORY_LEN);
+      }
+
+      // Bandwidth: per-channel avgGBps (0 when idle)
+      for (const ch of cat.bandwidth || []) {
+        const summary = summarizeBandwidthChannel(ch);
+        pushHistory(bwHistoryRef.current, ch.channel, summary ? summary.avgGBps : 0);
+      }
+
+      // Voltage: per-channel non-VMIN active%
+      for (const ch of cat.voltage || []) {
+        if (!ch.states || ch.states.length === 0) continue;
+        let total = 0, vminRes = 0;
+        for (const s of ch.states) {
+          total += s.residency_ns;
+          if (s.name.trim() === 'VMIN') vminRes = s.residency_ns;
+        }
+        const activePct = total > 0 ? (total - vminRes) / total * 100 : 0;
+        pushHistory(voltageHistoryRef.current, ch.channel, activePct);
+      }
+
+      // Interrupt counters and handler time: always record all channels (0 when idle)
+      for (const ch of cat.interrupt || []) {
+        const isTime = ch.channel.includes('(MATUs)') || (ch.unit && ch.unit.includes('MATU'));
+        const val = Number.isFinite(ch.value) && ch.value > 0 ? ch.value : 0;
+        const rate = durSec > 0 ? val / durSec : 0;
+        if (isTime) {
+          pushHistory(handlerTimeHistoryRef.current, ch.channel, rate);
+        } else {
+          pushHistory(counterHistoryRef.current, ch.channel, rate);
+        }
+      }
+
+      // Throttle: total rate/s
+      let totalThrottles = 0;
+      for (const ch of cat.throttle || []) if (ch.value > 0) totalThrottles += ch.value;
+      const throttleRate = durSec > 0 ? totalThrottles / durSec : 0;
+      const th = throttleHistoryRef.current;
+      th.push(throttleRate);
+      if (th.length > HISTORY_LEN) th.splice(0, th.length - HISTORY_LEN);
     });
     es.onerror = () => setConnected(false);
     es.onopen = () => setConnected(true);
@@ -414,10 +470,10 @@ function App() {
       </div>
       <div class="detail-grid">
         <${ComputeUtilization} channels=${cat.computeEn} />
-        <${ANEStatesSection} voltage=${cat.voltage} dcsFloor=${cat.dcsFloor} />
-        <${BandwidthSection} channels=${cat.bandwidth} />
-        <${ThrottleOverviewSection} throttle=${cat.throttle} throttleDetail=${cat.throttleDetail} durationMs=${durationMs} />
-        <${CounterTable} channels=${cat.interrupt} durationMs=${durationMs} />
+        <${ANEStatesSection} voltage=${cat.voltage} dcsFloor=${cat.dcsFloor} voltageHistory=${voltageHistoryRef.current} />
+        <${BandwidthSection} channels=${cat.bandwidth} bwHistory=${bwHistoryRef.current} />
+        <${ThrottleOverviewSection} throttle=${cat.throttle} throttleDetail=${cat.throttleDetail} durationMs=${durationMs} throttleHistory=${throttleHistoryRef.current} />
+        <${CounterTable} channels=${cat.interrupt} durationMs=${durationMs} counterHistory=${counterHistoryRef.current} handlerTimeHistory=${handlerTimeHistoryRef.current} />
       </div>
       <${Footer} durationMs=${durationMs} channelCount=${(delta.channels || []).length} />
     </div>
@@ -520,11 +576,8 @@ function Sparkline({ data, color = 'var(--green)', emptyLabel = 'No recent activ
 }
 
 function ComputeUtilization({ channels }) {
-  if (!channels || channels.length === 0) {
-    return null;
-  }
   const items = [];
-  for (const ch of channels) {
+  for (const ch of (channels || [])) {
     if (!ch.states || ch.states.length === 0) continue;
     let total = 0, maxRes = 0;
     for (const s of ch.states) { total += s.residency_ns; if (s.residency_ns > maxRes) maxRes = s.residency_ns; }
@@ -545,14 +598,11 @@ function ComputeUtilization({ channels }) {
     const weightedAvg = weightedSum / total;
     items.push({ channel: ch.channel, rows, peakName, peakPct, weightedAvg });
   }
-  if (items.length === 0) {
-    return null;
-  }
   return html`
     <div class="detail-card">
     <div class="section">
       <h2 title="Fast-Die CE histogram showing ANE compute utilization distribution. Each bucket shows residency at that utilization level. Weighted average gives overall utilization.">Compute Utilization</h2>
-      ${items.map(item => html`
+      ${items.length > 0 ? items.map(item => html`
         <div style="color:var(--dim);font-size:11px;margin-bottom:4px">${item.channel}</div>
         <div style="font-size:11px;color:var(--dim);margin-bottom:6px">Peak: ${item.peakName} (${item.peakPct.toFixed(1)}%) · Weighted avg: ${item.weightedAvg.toFixed(1)}%</div>
         <div class="histogram">
@@ -564,7 +614,7 @@ function ComputeUtilization({ channels }) {
             </div>
           `)}
         </div>
-      `)}
+      `) : html`<div class="empty-state">No compute utilization data.</div>`}
     </div>
     </div>
   `;
@@ -654,15 +704,29 @@ function hasStateActivity(channels) {
   return false;
 }
 
-function ANEStatesSection({ voltage, dcsFloor }) {
+function ANEStatesSection({ voltage, dcsFloor, voltageHistory }) {
   const voltageRows = (voltage || []).map(summarizeStates).filter(Boolean).filter(row => !(row.dominantName === 'VMIN' && row.dominantPct >= 99));
   const dcsRows = (dcsFloor || []).map(summarizeStates).filter(Boolean).filter(row => !(row.active.length === 1 && row.dominantPct >= 99));
-  if (voltageRows.length === 0 && dcsRows.length === 0) return null;
+  const anyVoltageHistory = voltageHistory && Object.values(voltageHistory).some(h => hasHistorySignal(h));
+  // Always show the section.
   return html`
     <div class="detail-card"><div class="section" title="Voltage and DCS state residency for the ANE. Voltage shows rail level residency; DCS shows memory-frequency demand states.">
       <h2>ANE States</h2>
       <div class="compact-note" style="margin-bottom:4px">Voltage</div>
-      ${voltageRows.length > 0 ? renderStateRows(voltageRows) : html`<div class="empty-state" style="padding-top:0;padding-bottom:6px">No recent voltage activity.</div>`}
+      ${voltageRows.length > 0 ? voltageRows.map(row => {
+        const hist = voltageHistory && voltageHistory[row.channel];
+        const stats = hist ? powerStats(hist) : null;
+        return html`
+          <div class="channel-row" key=${row.channel}>
+            <span class="channel-name">${row.channel}</span>
+            <div class="state-chips">
+              ${row.active.slice(0, 4).map(s => html`<span class="state-chip ${s.name === row.dominantName ? 'dominant' : ''}" key=${s.name}>${s.name} ${Math.round(s.pct)}%</span>`)}
+            </div>
+            ${hist && hist.length >= 2 ? html`<${MiniSparkline} data=${hist} color="var(--blue)" />` : null}
+          </div>
+          ${stats ? html`<div class="metrics-inline" key=${'stats-'+row.channel} style="margin:0 0 4px 116px"><span class="metric-chip">min ${stats.min.toFixed(1)}%</span><span class="metric-chip">avg ${stats.avg.toFixed(1)}%</span><span class="metric-chip">max ${stats.max.toFixed(1)}%</span></div>` : null}
+        `;
+      }) : html`<div class="empty-state" style="padding-top:0;padding-bottom:6px">No recent voltage activity.</div>`}
       <div class="compact-note" style="margin:6px 0 4px;border-top:1px solid var(--border);padding-top:6px">DCS Frequency</div>
       ${dcsRows.length > 0 ? renderStateRows(dcsRows) : html`<div class="empty-state" style="padding-top:0">No recent DCS activity.</div>`}
     </div></div>
@@ -686,28 +750,52 @@ function StateSection({ title, channels }) {
   `;
 }
 
-function BandwidthSection({ channels }) {
+function MiniSparkline({ data, color = 'var(--cyan)', height = 20 }) {
+  if (!data || data.length < 2) return null;
+  const w = 80, h = height;
+  const max = Math.max(...data, 0);
+  if (max <= 0.001) return null;
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h - (v / max) * h;
+    return `${x},${y}`;
+  }).join(' ');
+  return html`
+    <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:inline-block;vertical-align:middle">
+      <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.2" stroke-linejoin="round" />
+    </svg>
+  `;
+}
+
+function BandwidthSection({ channels, bwHistory }) {
   const rows = (channels || [])
     .map(summarizeBandwidthChannel)
     .filter(Boolean)
     .filter(item => item.avgGBps >= item.minTier + 0.5 || item.dominantPct < 95)
     .sort((a, b) => b.avgGBps - a.avgGBps || a.channel.localeCompare(b.channel));
-  if (rows.length === 0) return null;
+  // Always show the section.
 
   return html`
     <div class="detail-card span-2"><div class="section" title="Bandwidth shows ANE memory bus utilization across AF, DCS, and SOC-NI subsystems. RD=read, WR=write, RD+WR=combined.">
       <h2>Bandwidth</h2>
       <div class="bandwidth-grid">
-      ${rows.slice(0, 8).map(item => html`
-        <div class="bandwidth-item">
+      ${rows.length > 0 ? rows.slice(0, 8).map(item => {
+        const hist = bwHistory && bwHistory[item.channel];
+        const stats = hist ? powerStats(hist) : null;
+        return html`
+        <div class="bandwidth-item" key=${item.channel}>
           <div class="bandwidth-group">${item.subgroup || 'bandwidth'}</div>
           <div class="bandwidth-desc">
             <div class="bandwidth-name">${item.channel}</div>
             <div class="bandwidth-meta">floor ${item.minTier.toFixed(0)}GB/s · dominant ${item.dominantName} ${item.dominantPct.toFixed(0)}% · peak ${item.maxTier.toFixed(0)}GB/s</div>
+            ${stats ? html`<div class="metrics-inline" style="margin-top:2px"><span class="metric-chip">min ${stats.min.toFixed(1)}</span><span class="metric-chip">avg ${stats.avg.toFixed(1)}</span><span class="metric-chip">max ${stats.max.toFixed(1)} GB/s</span></div>` : null}
           </div>
-          <div class="bandwidth-avg">${item.avgGBps.toFixed(1)}GB/s</div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <div class="bandwidth-avg">${item.avgGBps.toFixed(1)}GB/s</div>
+            ${hist && hist.length >= 2 ? html`<${MiniSparkline} data=${hist} color="var(--cyan)" />` : null}
+          </div>
         </div>
-      `)}
+      `}) : html`<div class="empty-state">No active bandwidth channels.</div>`}
       </div>
     </div></div>
   `;
@@ -755,31 +843,32 @@ function summarizeThrottleDetail(channels) {
   return items;
 }
 
-function ThrottleOverviewSection({ throttle, throttleDetail, durationMs }) {
+function ThrottleOverviewSection({ throttle, throttleDetail, durationMs, throttleHistory }) {
   const activeEvents = (throttle || []).filter(ch => ch.value > 0);
   const detail = summarizeThrottleDetail(throttleDetail);
   const activeDetail = detail.filter(item => item.actPct > 0);
-  if (activeEvents.length === 0 && activeDetail.length === 0) return null;
+  // Always show the section.
   const durSec = (durationMs || 1000) / 1000;
   let totalThrottles = 0;
   for (const ch of activeEvents) totalThrottles += ch.value;
   const rate = durSec > 0 ? totalThrottles / durSec : 0;
+  const tStats = throttleHistory ? powerStats(throttleHistory) : null;
 
   return html`
     <div class="detail-card"><div class="section" title="Throttle counters and per-reason residency.">
       <h2 style="color:var(--yellow)">Throttle</h2>
-      ${activeEvents.length > 0 ? html`
-        <div class="metrics-inline" style="margin-top:0;margin-bottom:6px">
-          <span class="metric-chip">events ${totalThrottles}</span>
-          <span class="metric-chip">rate ${rate.toFixed(1)}/s</span>
+      <div class="metrics-inline" style="margin-top:0;margin-bottom:6px">
+        <span class="metric-chip">events ${totalThrottles}</span>
+        <span class="metric-chip">rate ${rate.toFixed(1)}/s</span>
+        ${tStats ? html`<span class="metric-chip">min ${tStats.min.toFixed(1)}/s</span><span class="metric-chip">avg ${tStats.avg.toFixed(1)}/s</span><span class="metric-chip">max ${tStats.max.toFixed(1)}/s</span>` : null}
+      </div>
+      ${throttleHistory && throttleHistory.length >= 2 && hasHistorySignal(throttleHistory) ? html`<${Sparkline} data=${throttleHistory} color="var(--yellow)" emptyLabel="" />` : null}
+      ${activeEvents.length > 0 ? activeEvents.slice(0, 4).map(ch => html`
+        <div class="energy-row">
+          <span>${ch.channel}</span>
+          <span class="throttle-alert">${ch.value} ${ch.unit}</span>
         </div>
-        ${activeEvents.slice(0, 4).map(ch => html`
-          <div class="energy-row">
-            <span>${ch.channel}</span>
-            <span class="throttle-alert">${ch.value} ${ch.unit}</span>
-          </div>
-        `)}
-      ` : null}
+      `) : html`<div class="empty-state">No active throttle events.</div>`}
       ${activeDetail.length > 0 ? html`
         <div class="compact-note" style="margin:6px 0 4px;border-top:1px solid var(--border);padding-top:6px">Reason Activity</div>
         ${activeDetail.slice(0, 6).map(item => html`
@@ -866,53 +955,59 @@ function ThrottleDetailSection({ channels }) {
   `;
 }
 
-function CounterTable({ channels, durationMs }) {
+function CounterTable({ channels, durationMs, counterHistory, handlerTimeHistory }) {
   if (!channels || channels.length === 0) {
-    return null;
-  }
-  const active = channels.filter(ch => Number.isFinite(ch.value) && ch.value !== 0);
-  if (active.length === 0) {
     return null;
   }
   const durSec = (durationMs || 1000) / 1000;
 
-  const countChs = active.filter(ch => !ch.channel.includes('(MATUs)') && !(ch.unit && ch.unit.includes('MATU')));
-  const timeChs = active.filter(ch => ch.channel.includes('(MATUs)') || (ch.unit && ch.unit.includes('MATU')));
+  // Show channels that are active now OR have historical signal.
+  const allCountChs = (channels || []).filter(ch => !ch.channel.includes('(MATUs)') && !(ch.unit && ch.unit.includes('MATU')));
+  const allTimeChs = (channels || []).filter(ch => ch.channel.includes('(MATUs)') || (ch.unit && ch.unit.includes('MATU')));
+  const countChs = allCountChs.filter(ch => (Number.isFinite(ch.value) && ch.value !== 0) || (counterHistory && counterHistory[ch.channel] && hasHistorySignal(counterHistory[ch.channel])));
+  const timeChs = allTimeChs.filter(ch => (Number.isFinite(ch.value) && ch.value !== 0) || (handlerTimeHistory && handlerTimeHistory[ch.channel] && hasHistorySignal(handlerTimeHistory[ch.channel])));
+  // Always show the section.
 
   return html`
     <div class="wide-card">
+    <div class="section" title="Counters show interrupt and handler invocation counts. Handler Count = number of times the ANE interrupt handler ran. Rate (/s) shows frequency.">
+      <h2>Counters</h2>
     ${countChs.length > 0 ? html`
-      <div class="section" title="Counters show interrupt and handler invocation counts. Handler Count = number of times the ANE interrupt handler ran. Rate (/s) shows frequency.">
-        <h2>Counters</h2>
         <div class="scroll-region">
         <table class="counter-table">
-          <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">count</td><td style="color:var(--dim)">/s</td></tr></thead>
+          <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">count</td><td style="color:var(--dim)">/s</td><td style="color:var(--dim)">trend</td><td style="color:var(--dim)">min</td><td style="color:var(--dim)">avg</td><td style="color:var(--dim)">max</td></tr></thead>
           <tbody>
             ${countChs.map(ch => {
-              const rate = durSec > 0 ? ch.value / durSec : 0;
-              return html`<tr><td>${ch.channel}</td><td>${ch.value}</td><td style="color:var(--dim)">${rate.toFixed(1)}</td></tr>`;
+              const val = Number.isFinite(ch.value) && ch.value > 0 ? ch.value : 0;
+              const rate = durSec > 0 ? val / durSec : 0;
+              const hist = counterHistory && counterHistory[ch.channel];
+              const stats = hist ? powerStats(hist) : null;
+              return html`<tr key=${ch.channel}><td>${ch.channel}</td><td>${val}</td><td style="color:var(--dim)">${rate.toFixed(1)}</td><td>${hist && hist.length >= 2 ? html`<${MiniSparkline} data=${hist} color="var(--yellow)" height=${14} />` : null}</td><td style="color:var(--dim)">${stats ? stats.min.toFixed(1) : ''}</td><td style="color:var(--dim)">${stats ? stats.avg.toFixed(1) : ''}</td><td style="color:var(--dim)">${stats ? stats.max.toFixed(1) : ''}</td></tr>`;
             })}
           </tbody>
         </table>
         </div>
-      </div>
-    ` : null}
+    ` : html`<div class="empty-state">No counter data.</div>`}
+    </div>
+    <div class="section" title="Handler Time shows cumulative time spent in interrupt handlers, measured in Mach absolute time units. High values indicate frequent or long-running interrupt handling.">
+      <h2 style="color:var(--dim)">Handler Time (MATUs)</h2>
     ${timeChs.length > 0 ? html`
-      <div class="section" title="Handler Time shows cumulative time spent in interrupt handlers, measured in Mach absolute time units. High values indicate frequent or long-running interrupt handling.">
-        <h2 style="color:var(--dim)">Handler Time (MATUs)</h2>
         <div class="scroll-region">
         <table class="counter-table">
-          <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">time</td><td style="color:var(--dim)">/s</td></tr></thead>
+          <thead><tr><td style="color:var(--dim)">channel</td><td style="color:var(--dim)">time</td><td style="color:var(--dim)">/s</td><td style="color:var(--dim)">trend</td><td style="color:var(--dim)">min</td><td style="color:var(--dim)">avg</td><td style="color:var(--dim)">max</td></tr></thead>
           <tbody>
             ${timeChs.map(ch => {
-              const rate = durSec > 0 ? ch.value / durSec : 0;
-              return html`<tr style="color:var(--dim)"><td>${ch.channel}</td><td>${ch.value}</td><td>${rate.toFixed(1)}</td></tr>`;
+              const val = Number.isFinite(ch.value) && ch.value > 0 ? ch.value : 0;
+              const rate = durSec > 0 ? val / durSec : 0;
+              const hist = handlerTimeHistory && handlerTimeHistory[ch.channel];
+              const stats = hist ? powerStats(hist) : null;
+              return html`<tr key=${ch.channel} style="color:var(--dim)"><td>${ch.channel}</td><td>${val}</td><td>${rate.toFixed(1)}</td><td>${hist && hist.length >= 2 ? html`<${MiniSparkline} data=${hist} color="var(--orange)" height=${14} />` : null}</td><td>${stats ? stats.min.toFixed(1) : ''}</td><td>${stats ? stats.avg.toFixed(1) : ''}</td><td>${stats ? stats.max.toFixed(1) : ''}</td></tr>`;
             })}
           </tbody>
         </table>
         </div>
-      </div>
-    ` : null}
+    ` : html`<div class="empty-state">No handler time data.</div>`}
+    </div>
     </div>
   `;
 }
