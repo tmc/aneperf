@@ -13,6 +13,7 @@
 //
 //	--interval  sample interval (default 1s)
 //	--json      single JSON sample then exit
+//	-v          verbose JSON output (include all raw channels)
 package main
 
 import (
@@ -53,15 +54,16 @@ const (
 func main() {
 	interval := flag.Duration("interval", 1*time.Second, "sample interval")
 	jsonOut := flag.Bool("json", false, "single JSON sample then exit")
+	verbose := flag.Bool("v", false, "verbose JSON output (include all raw channels)")
 	flag.Parse()
 
-	if err := run(*interval, *jsonOut); err != nil {
+	if err := run(*interval, *jsonOut, *verbose); err != nil {
 		fmt.Fprintf(os.Stderr, "aneperf: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(interval time.Duration, jsonOut bool) error {
+func run(interval time.Duration, jsonOut, verbose bool) error {
 	sampler, err := aneperf.NewSampler()
 	if err != nil {
 		return err
@@ -69,25 +71,54 @@ func run(interval time.Duration, jsonOut bool) error {
 	defer sampler.Close()
 
 	if jsonOut {
-		return runOnce(sampler, interval)
+		return runOnce(sampler, interval, verbose)
 	}
 	return runLive(sampler, interval)
 }
 
-func runOnce(sampler *aneperf.Sampler, interval time.Duration) error {
+// sampleSummary is the condensed JSON output for --json (without -v).
+type sampleSummary struct {
+	Timestamp           time.Time `json:"timestamp"`
+	Architecture        string    `json:"architecture"`
+	NumCores            int64     `json:"num_cores"`
+	ANEPowerW           float64   `json:"ane_power_watts"`
+	ANEUtilizationPct   float64   `json:"ane_utilization_pct"`
+	ANEClusterActivePct float64   `json:"ane_cluster_active_pct"`
+	GPUPowerW           float64   `json:"gpu_power_watts,omitempty"`
+	GPUActivePct        float64   `json:"gpu_active_pct,omitempty"`
+	GPUTempC            float64   `json:"gpu_temp_c,omitempty"`
+}
+
+func runOnce(sampler *aneperf.Sampler, interval time.Duration, verbose bool) error {
 	sample, err := sampler.Sample(interval)
 	if err != nil {
 		return err
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(sample)
+	if verbose {
+		return enc.Encode(sample)
+	}
+	return enc.Encode(sampleSummary{
+		Timestamp:           sample.Timestamp,
+		Architecture:        sample.Device.Architecture,
+		NumCores:            sample.Device.NumCores,
+		ANEPowerW:           sample.ANEPowerW,
+		ANEUtilizationPct:   sample.ANEUtilizationPct,
+		ANEClusterActivePct: sample.ANEClusterActivePct,
+		GPUPowerW:           sample.GPUPowerW,
+		GPUActivePct:        sample.GPUActivePct,
+		GPUTempC:            sample.GPUTempC,
+	})
 }
 
 var powerHistory []float64
 var gpuPowerHistory []float64
 var gpuStateHistory = newChannelStateWindow(4)
 var bandwidthHistory = newChannelStateWindow(4)
+
+// channelHistory tracks per-channel scalar histories (bandwidth, rates, etc.)
+var channelHistory = map[string][]float64{}
 
 const historyLen = 38
 const maxRenderedStates = 4
@@ -106,6 +137,7 @@ func runLive(sampler *aneperf.Sampler, interval time.Duration) error {
 	gpuPowerHistory = nil
 	gpuStateHistory = newChannelStateWindow(4)
 	bandwidthHistory = newChannelStateWindow(4)
+	channelHistory = map[string][]float64{}
 
 	enterLiveScreen()
 	defer leaveLiveScreen()
@@ -249,7 +281,7 @@ func printLive(d aneperf.Delta, interval time.Duration) {
 	printBandwidth(bandwidth)
 
 	// Throttle.
-	printThrottle(cat.Throttle, stats.TotalThrottles)
+	printThrottle(cat.Throttle, stats.TotalThrottles, d.Duration)
 
 	// Throttle detail — SoC Stats residency breakdown.
 	printThrottleDetail(cat.ThrottleDetail)
@@ -464,6 +496,16 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 		if !stateSectionInteresting(title, active, dominantName, dominantPct) {
 			continue
 		}
+
+		// Track voltage active% history (non-VMIN residency).
+		var voltStats string
+		if title == "Voltage States" {
+			activePct := 100.0 - vminPct(ch)
+			hkey := "volt:" + ch.Channel
+			recordHistory(hkey, activePct)
+			voltStats = historyStats(hkey)
+		}
+
 		var b strings.Builder
 		fmt.Fprintf(&b, "  %-22s", ch.Channel)
 		limit := min(len(active), maxRenderedStates)
@@ -477,6 +519,7 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 		if len(active) > limit {
 			fmt.Fprintf(&b, "  %s+%d%s", ansiDim, len(active)-limit, ansiReset)
 		}
+		b.WriteString(voltStats)
 		lines = append(lines, b.String())
 	}
 	if len(lines) == 0 {
@@ -543,12 +586,15 @@ func printBandwidth(channels []aneperf.Channel) {
 	fmt.Printf("%s╸ Bandwidth%s\n", ansiBold, ansiReset)
 	limit := min(len(rows), 8)
 	for _, row := range rows[:limit] {
-		fmt.Printf("  %s%-14s%s  %-18s  %s%5.1fGB/s%s avg  %s%-6s%s %3.0f%%  %speak %4.0fGB/s%s\n",
+		hkey := "bw:" + row.channel
+		recordHistory(hkey, row.summary.AvgGBps)
+		fmt.Printf("  %s%-14s%s  %-18s  %s%5.1fGB/s%s avg  %s%-6s%s %3.0f%%  %speak %4.0fGB/s%s%s\n",
 			ansiDim, row.group, ansiReset,
 			row.channel,
 			ansiCyan, row.summary.AvgGBps, ansiReset,
 			ansiWhite, row.summary.DominantName, ansiReset, row.summary.DominantPct,
-			ansiDim, row.summary.MaxGBps, ansiReset)
+			ansiDim, row.summary.MaxGBps, ansiReset,
+			historyStats(hkey))
 	}
 	if len(rows) > limit {
 		fmt.Printf("  %s+%d more bandwidth channels%s\n", ansiDim, len(rows)-limit, ansiReset)
@@ -620,7 +666,7 @@ func parseBandwidthGBps(name string) float64 {
 }
 
 // printThrottle prints throttle event counters.
-func printThrottle(channels []aneperf.Channel, totalThrottles int64) {
+func printThrottle(channels []aneperf.Channel, totalThrottles int64, dur time.Duration) {
 	var hasThrottle bool
 	for _, ch := range channels {
 		if ch.Value > 0 {
@@ -632,7 +678,14 @@ func printThrottle(channels []aneperf.Channel, totalThrottles int64) {
 		return
 	}
 
-	fmt.Printf("%s╸ Throttle%s %s%d total%s\n", ansiBold, ansiReset, ansiDim, totalThrottles, ansiReset)
+	rate := 0.0
+	if dur.Seconds() > 0 {
+		rate = float64(totalThrottles) / dur.Seconds()
+	}
+	recordHistory("throttle:total", rate)
+	fmt.Printf("%s╸ Throttle%s %s%d total  %.0f/s%s%s\n",
+		ansiBold, ansiReset, ansiDim, totalThrottles, rate, ansiReset,
+		historyStats("throttle:total"))
 	for _, ch := range channels {
 		if ch.Value > 0 {
 			fmt.Printf("  %-40s %s%d%s %s\n", ch.Channel, ansiYellow, ch.Value, ansiReset, ch.Unit)
@@ -664,8 +717,11 @@ func printCounters(channels []aneperf.Channel, dur time.Duration) {
 			if durSec > 0 {
 				rate = float64(ch.Value) / durSec
 			}
-			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s\n",
-				shortCounterName(ch.Channel), ansiYellow, ch.Value, ansiReset, ansiDim, rate, ansiReset)
+			hkey := "cnt:" + ch.Channel
+			recordHistory(hkey, rate)
+			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s%s\n",
+				shortCounterName(ch.Channel), ansiYellow, ch.Value, ansiReset, ansiDim, rate, ansiReset,
+				historyStats(hkey))
 		}
 		fmt.Println()
 	}
@@ -677,8 +733,11 @@ func printCounters(channels []aneperf.Channel, dur time.Duration) {
 			if durSec > 0 {
 				rate = float64(ch.Value) / durSec
 			}
-			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s\n",
-				shortCounterName(ch.Channel), ansiDim, ch.Value, ansiReset, ansiDim, rate, ansiReset)
+			hkey := "time:" + ch.Channel
+			recordHistory(hkey, rate)
+			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s%s\n",
+				shortCounterName(ch.Channel), ansiDim, ch.Value, ansiReset, ansiDim, rate, ansiReset,
+				historyStats(hkey))
 		}
 		fmt.Println()
 	}
@@ -782,6 +841,41 @@ func printThrottleDetail(channels []aneperf.Channel) {
 		fmt.Println()
 	}
 	fmt.Println()
+}
+
+// vminPct returns the VMIN residency percentage for a channel.
+func vminPct(ch aneperf.Channel) float64 {
+	var total, vmin int64
+	for _, s := range ch.States {
+		total += s.Residency
+		if strings.TrimSpace(s.Name) == "VMIN" {
+			vmin = s.Residency
+		}
+	}
+	if total == 0 {
+		return 100
+	}
+	return float64(vmin) / float64(total) * 100
+}
+
+// recordHistory appends a value to the named channel's history, capping at historyLen.
+func recordHistory(key string, val float64) {
+	h := channelHistory[key]
+	h = append(h, val)
+	if len(h) > historyLen {
+		h = h[len(h)-historyLen:]
+	}
+	channelHistory[key] = h
+}
+
+// historyStats returns formatted dim min/avg/max string for a channel history key.
+func historyStats(key string) string {
+	h := channelHistory[key]
+	if len(h) < 2 {
+		return ""
+	}
+	mn, av, mx := powerStats(h)
+	return fmt.Sprintf("  %smin %.1f  avg %.1f  max %.1f%s", ansiDim, mn, av, mx, ansiReset)
 }
 
 func powerStats(history []float64) (min, avg, max float64) {
