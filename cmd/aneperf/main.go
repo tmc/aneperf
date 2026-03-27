@@ -457,11 +457,22 @@ func printGPUStats(channels []aneperf.Channel) {
 }
 
 // printStateSection prints voltage or DCS floor state channels.
+// Always records voltage history so past activity remains visible.
 func printStateSection(title string, channels []aneperf.Channel, dominantColor, otherColor string) {
 	if len(channels) == 0 {
 		return
 	}
+
+	// Record voltage history for all channels upfront.
+	if title == "Voltage States" {
+		for _, ch := range channels {
+			activePct := 100.0 - vminPct(ch)
+			recordHistory("volt:"+ch.Channel, activePct)
+		}
+	}
+
 	var lines []string
+	shown := make(map[string]bool)
 	for _, ch := range channels {
 		var total int64
 		for _, s := range ch.States {
@@ -496,14 +507,11 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 		if !stateSectionInteresting(title, active, dominantName, dominantPct) {
 			continue
 		}
+		shown[ch.Channel] = true
 
-		// Track voltage active% history (non-VMIN residency).
 		var voltStats string
 		if title == "Voltage States" {
-			activePct := 100.0 - vminPct(ch)
-			hkey := "volt:" + ch.Channel
-			recordHistory(hkey, activePct)
-			voltStats = historyStats(hkey)
+			voltStats = historyStats("volt:" + ch.Channel)
 		}
 
 		var b strings.Builder
@@ -522,6 +530,20 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 		b.WriteString(voltStats)
 		lines = append(lines, b.String())
 	}
+
+	// Show channels that have historical signal even if currently idle/uninteresting.
+	if title == "Voltage States" {
+		for _, ch := range channels {
+			if shown[ch.Channel] {
+				continue
+			}
+			hkey := "volt:" + ch.Channel
+			if hasHistorySignal(hkey) {
+				lines = append(lines, fmt.Sprintf("  %-22s  %sidle%s%s", ch.Channel, ansiDim, ansiReset, historyStats(hkey)))
+			}
+		}
+	}
+
 	if len(lines) == 0 {
 		return
 	}
@@ -533,23 +555,9 @@ func printStateSection(title string, channels []aneperf.Channel, dominantColor, 
 }
 
 // printBandwidth prints bandwidth channels grouped by SubGroup with headers.
+// Always records history (even zero) so past activity remains visible.
 func printBandwidth(channels []aneperf.Channel) {
 	if len(channels) == 0 {
-		return
-	}
-
-	hasActivity := false
-	for _, ch := range channels {
-		var total int64
-		for _, s := range ch.States {
-			total += s.Residency
-		}
-		if total > 0 {
-			hasActivity = true
-			break
-		}
-	}
-	if !hasActivity {
 		return
 	}
 
@@ -557,19 +565,39 @@ func printBandwidth(channels []aneperf.Channel) {
 		group   string
 		channel string
 		summary bandwidthSummary
+		ok      bool // has current-sample data
 	}
+
+	// Record history for all channels, even idle ones.
 	var rows []bandwidthRow
 	for _, ch := range channels {
 		summary, ok := summarizeBandwidth(ch)
-		if !ok || !summary.isInteresting() {
+		hkey := "bw:" + ch.Channel
+		if ok {
+			recordHistory(hkey, summary.AvgGBps)
+		} else {
+			recordHistory(hkey, 0)
+		}
+		if ok && summary.isInteresting() {
+			rows = append(rows, bandwidthRow{group: ch.SubGroup, channel: ch.Channel, summary: summary, ok: true})
+		}
+	}
+
+	// Also show channels that have historical signal even if current sample is idle.
+	shown := make(map[string]bool)
+	for _, r := range rows {
+		shown[r.channel] = true
+	}
+	for _, ch := range channels {
+		if shown[ch.Channel] {
 			continue
 		}
-		rows = append(rows, bandwidthRow{
-			group:   ch.SubGroup,
-			channel: ch.Channel,
-			summary: summary,
-		})
+		hkey := "bw:" + ch.Channel
+		if hasHistorySignal(hkey) {
+			rows = append(rows, bandwidthRow{group: ch.SubGroup, channel: ch.Channel})
+		}
 	}
+
 	if len(rows) == 0 {
 		return
 	}
@@ -587,14 +615,20 @@ func printBandwidth(channels []aneperf.Channel) {
 	limit := min(len(rows), 8)
 	for _, row := range rows[:limit] {
 		hkey := "bw:" + row.channel
-		recordHistory(hkey, row.summary.AvgGBps)
-		fmt.Printf("  %s%-14s%s  %-18s  %s%5.1fGB/s%s avg  %s%-6s%s %3.0f%%  %speak %4.0fGB/s%s%s\n",
-			ansiDim, row.group, ansiReset,
-			row.channel,
-			ansiCyan, row.summary.AvgGBps, ansiReset,
-			ansiWhite, row.summary.DominantName, ansiReset, row.summary.DominantPct,
-			ansiDim, row.summary.MaxGBps, ansiReset,
-			historyStats(hkey))
+		if row.ok {
+			fmt.Printf("  %s%-14s%s  %-18s  %s%5.1fGB/s%s avg  %s%-6s%s %3.0f%%  %speak %4.0fGB/s%s%s\n",
+				ansiDim, row.group, ansiReset,
+				row.channel,
+				ansiCyan, row.summary.AvgGBps, ansiReset,
+				ansiWhite, row.summary.DominantName, ansiReset, row.summary.DominantPct,
+				ansiDim, row.summary.MaxGBps, ansiReset,
+				historyStats(hkey))
+		} else {
+			// Idle now but has history.
+			fmt.Printf("  %s%-14s  %-18s  idle%s%s\n",
+				ansiDim, row.group, row.channel, ansiReset,
+				historyStats(hkey))
+		}
 	}
 	if len(rows) > limit {
 		fmt.Printf("  %s+%d more bandwidth channels%s\n", ansiDim, len(rows)-limit, ansiReset)
@@ -666,23 +700,20 @@ func parseBandwidthGBps(name string) float64 {
 }
 
 // printThrottle prints throttle event counters.
+// Always records history so past throttle events remain visible.
 func printThrottle(channels []aneperf.Channel, totalThrottles int64, dur time.Duration) {
-	var hasThrottle bool
-	for _, ch := range channels {
-		if ch.Value > 0 {
-			hasThrottle = true
-			break
-		}
-	}
-	if !hasThrottle {
-		return
-	}
-
 	rate := 0.0
-	if dur.Seconds() > 0 {
+	if dur.Seconds() > 0 && totalThrottles > 0 {
 		rate = float64(totalThrottles) / dur.Seconds()
 	}
 	recordHistory("throttle:total", rate)
+
+	hasThrottle := totalThrottles > 0
+	hasHistory := hasHistorySignal("throttle:total")
+	if !hasThrottle && !hasHistory {
+		return
+	}
+
 	fmt.Printf("%s╸ Throttle%s %s%d total  %.0f/s%s%s\n",
 		ansiBold, ansiReset, ansiDim, totalThrottles, rate, ansiReset,
 		historyStats("throttle:total"))
@@ -695,13 +726,12 @@ func printThrottle(channels []aneperf.Channel, totalThrottles int64, dur time.Du
 }
 
 // printCounters prints interrupt/counter channels with rate, split into count vs time.
+// Always records history so past activity remains visible when idle.
 func printCounters(channels []aneperf.Channel, dur time.Duration) {
 	var countChs, timeChs []aneperf.Channel
 	for _, ch := range channels {
-		if ch.Value == 0 {
-			continue
-		}
-		if strings.Contains(ch.Channel, "(MATUs)") || strings.Contains(ch.Unit, "MATU") {
+		isTime := strings.Contains(ch.Channel, "(MATUs)") || strings.Contains(ch.Unit, "MATU")
+		if isTime {
 			timeChs = append(timeChs, ch)
 		} else {
 			countChs = append(countChs, ch)
@@ -710,15 +740,37 @@ func printCounters(channels []aneperf.Channel, dur time.Duration) {
 
 	durSec := dur.Seconds()
 
-	if len(countChs) > 0 {
+	// Record history for all channels (even zero-value).
+	for _, ch := range countChs {
+		rate := 0.0
+		if durSec > 0 && ch.Value > 0 {
+			rate = float64(ch.Value) / durSec
+		}
+		recordHistory("cnt:"+ch.Channel, rate)
+	}
+	for _, ch := range timeChs {
+		rate := 0.0
+		if durSec > 0 && ch.Value > 0 {
+			rate = float64(ch.Value) / durSec
+		}
+		recordHistory("time:"+ch.Channel, rate)
+	}
+
+	// Show counters that have current activity or historical signal.
+	var showCount []aneperf.Channel
+	for _, ch := range countChs {
+		if ch.Value > 0 || hasHistorySignal("cnt:"+ch.Channel) {
+			showCount = append(showCount, ch)
+		}
+	}
+	if len(showCount) > 0 {
 		fmt.Printf("%s╸ Counters%s\n", ansiBold, ansiReset)
-		for _, ch := range countChs {
+		for _, ch := range showCount {
 			rate := 0.0
-			if durSec > 0 {
+			if durSec > 0 && ch.Value > 0 {
 				rate = float64(ch.Value) / durSec
 			}
 			hkey := "cnt:" + ch.Channel
-			recordHistory(hkey, rate)
 			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s%s\n",
 				shortCounterName(ch.Channel), ansiYellow, ch.Value, ansiReset, ansiDim, rate, ansiReset,
 				historyStats(hkey))
@@ -726,15 +778,20 @@ func printCounters(channels []aneperf.Channel, dur time.Duration) {
 		fmt.Println()
 	}
 
-	if len(timeChs) > 0 {
+	var showTime []aneperf.Channel
+	for _, ch := range timeChs {
+		if ch.Value > 0 || hasHistorySignal("time:"+ch.Channel) {
+			showTime = append(showTime, ch)
+		}
+	}
+	if len(showTime) > 0 {
 		fmt.Printf("%s╸ Handler Time (MATUs)%s\n", ansiBold, ansiReset)
-		for _, ch := range timeChs {
+		for _, ch := range showTime {
 			rate := 0.0
-			if durSec > 0 {
+			if durSec > 0 && ch.Value > 0 {
 				rate = float64(ch.Value) / durSec
 			}
 			hkey := "time:" + ch.Channel
-			recordHistory(hkey, rate)
 			fmt.Printf("  %-24s %s%8d%s  %s%7.1f/s%s%s\n",
 				shortCounterName(ch.Channel), ansiDim, ch.Value, ansiReset, ansiDim, rate, ansiReset,
 				historyStats(hkey))
@@ -876,6 +933,16 @@ func historyStats(key string) string {
 	}
 	mn, av, mx := powerStats(h)
 	return fmt.Sprintf("  %smin %.1f  avg %.1f  max %.1f%s", ansiDim, mn, av, mx, ansiReset)
+}
+
+// hasHistorySignal returns true if the named channel has any non-zero history.
+func hasHistorySignal(key string) bool {
+	for _, v := range channelHistory[key] {
+		if v > 0.001 {
+			return true
+		}
+	}
+	return false
 }
 
 func powerStats(history []float64) (min, avg, max float64) {
