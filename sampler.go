@@ -76,15 +76,16 @@ func (s *Sampler) Stop(snap Snapshot) Delta {
 	stats := ComputeStats(Delta{Duration: duration, Channels: channels})
 
 	return Delta{
-		Duration:            duration,
-		Device:              dev,
-		PowerW:              power,
-		ANEUtilizationPct:   stats.ActivePct,
-		ANEClusterActivePct: stats.ClusterActivePct,
-		GPUPowerW:           gpuPower,
-		GPUActivePct:        stats.GPUActivePct,
-		GPUTempC:            gpuTemp,
-		Channels:            channels,
+		Duration:             duration,
+		Device:               dev,
+		PowerW:               power,
+		ANEUtilizationPct:    stats.ActivePct,
+		ANEUtilizationSource: stats.ActiveSource,
+		ANEClusterActivePct:  stats.ClusterActivePct,
+		GPUPowerW:            gpuPower,
+		GPUActivePct:         stats.GPUActivePct,
+		GPUTempC:             gpuTemp,
+		Channels:             channels,
 	}
 }
 
@@ -128,15 +129,16 @@ func (s *Sampler) Sample(interval time.Duration) (Sample, error) {
 	stats := ComputeStats(Delta{Duration: interval, Channels: channels})
 
 	return Sample{
-		Timestamp:           time.Now(),
-		Device:              dev,
-		ANEPowerW:           power,
-		ANEUtilizationPct:   stats.ActivePct,
-		ANEClusterActivePct: stats.ClusterActivePct,
-		GPUPowerW:           gpuPower,
-		GPUActivePct:        stats.GPUActivePct,
-		GPUTempC:            gpuTemp,
-		Channels:            channels,
+		Timestamp:            time.Now(),
+		Device:               dev,
+		ANEPowerW:            power,
+		ANEUtilizationPct:    stats.ActivePct,
+		ANEUtilizationSource: stats.ActiveSource,
+		ANEClusterActivePct:  stats.ClusterActivePct,
+		GPUPowerW:            gpuPower,
+		GPUActivePct:         stats.GPUActivePct,
+		GPUTempC:             gpuTemp,
+		Channels:             channels,
 	}, nil
 }
 

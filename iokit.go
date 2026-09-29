@@ -4,6 +4,7 @@ package aneperf
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/ebitengine/purego"
 )
@@ -42,45 +43,82 @@ func loadIOKit() error {
 
 // DeviceInfo contains H11ANE device properties from the IORegistry.
 type DeviceInfo struct {
-	Architecture string `json:"architecture"`
-	NumCores     int64  `json:"num_cores"`
-	BoardType    int64  `json:"board_type"`
-	BoardSubType int64  `json:"board_sub_type"`
-	Version      int64  `json:"version"`
-	MinorVersion int64  `json:"minor_version"`
-	FirmwareOK   bool   `json:"firmware_loaded"`
-	PowerState   int64  `json:"power_state"`
-	MaxPowerSt   int64  `json:"max_power_state"`
+	Architecture  string       `json:"architecture"`
+	NumCores      int64        `json:"num_cores"`
+	InstanceCount int          `json:"instance_count,omitempty"`
+	Instances     []DeviceInfo `json:"instances,omitempty"`
+	BoardType     int64        `json:"board_type"`
+	BoardSubType  int64        `json:"board_sub_type"`
+	Version       int64        `json:"version"`
+	MinorVersion  int64        `json:"minor_version"`
+	FirmwareOK    bool         `json:"firmware_loaded"`
+	PowerState    int64        `json:"power_state"`
+	MaxPowerSt    int64        `json:"max_power_state"`
 }
 
-// ReadDeviceInfo reads H11ANE driver properties from the IORegistry.
+// ReadDeviceInfo reads every H11ANE device and returns their combined core count.
+// Instances retains the properties of each physical ANE device.
 func ReadDeviceInfo() (DeviceInfo, error) {
-	if err := loadIOKit(); err != nil {
+	devices, err := ReadDeviceInfos()
+	if err != nil {
 		return DeviceInfo{}, err
+	}
+	return combineDeviceInfos(devices), nil
+}
+
+func combineDeviceInfos(devices []DeviceInfo) DeviceInfo {
+	combined := devices[0]
+	combined.InstanceCount = len(devices)
+	combined.Instances = devices
+	combined.NumCores = 0
+	for _, device := range devices {
+		combined.NumCores += device.NumCores
+		combined.FirmwareOK = combined.FirmwareOK && device.FirmwareOK
+	}
+	return combined
+}
+
+// ReadDeviceInfos reads properties for each H11ANE service in the IORegistry.
+func ReadDeviceInfos() ([]DeviceInfo, error) {
+	if err := loadIOKit(); err != nil {
+		return nil, err
 	}
 
 	var port uint32
 	if ioMainPort(0, &port) != 0 {
-		return DeviceInfo{}, fmt.Errorf("read device info: IOMainPort failed")
+		return nil, fmt.Errorf("read device info: IOMainPort failed")
 	}
 
 	matching := ioServiceMatching(cstring("H11ANEIn"))
 	if matching == 0 {
-		return DeviceInfo{}, fmt.Errorf("read device info: no H11ANEIn matching dict")
+		return nil, fmt.Errorf("read device info: no H11ANEIn matching dict")
 	}
 
 	var iter uint32
 	if ioServiceGetMatchingServices(port, matching, &iter) != 0 {
-		return DeviceInfo{}, fmt.Errorf("read device info: no H11ANE service found")
+		return nil, fmt.Errorf("read device info: no H11ANE service found")
 	}
 	defer ioObjectRelease(iter)
 
-	service := ioIteratorNext(iter)
-	if service == 0 {
-		return DeviceInfo{}, fmt.Errorf("read device info: no H11ANE device")
+	var devices []DeviceInfo
+	for service := ioIteratorNext(iter); service != 0; service = ioIteratorNext(iter) {
+		device, err := readANEDevice(service)
+		ioObjectRelease(service)
+		if err != nil {
+			return nil, err
+		}
+		devices = append(devices, device)
 	}
-	defer ioObjectRelease(service)
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("read device info: no H11ANE device")
+	}
+	sort.Slice(devices, func(i, j int) bool {
+		return devices[i].BoardSubType < devices[j].BoardSubType
+	})
+	return devices, nil
+}
 
+func readANEDevice(service uint32) (DeviceInfo, error) {
 	var props cfDictionaryRef
 	if ioRegistryEntryCreateCFProperties(service, &props, 0, 0) != 0 {
 		return DeviceInfo{}, fmt.Errorf("read device info: could not read properties")

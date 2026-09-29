@@ -54,6 +54,39 @@ func TestComputeStats(t *testing.T) {
 			wantPeakPct:    50,
 		},
 		{
+			name: "two ANE devices, second idle",
+			delta: Delta{
+				Duration: time.Second,
+				Channels: []Channel{
+					{Group: "PMP", SubGroup: "Fast-Die CE", Channel: "ANE0", States: []StateEntry{
+						{Name: "0%", Residency: 500},
+						{Name: "100%", Residency: 500},
+					}},
+					{Group: "PMP", SubGroup: "Fast-Die CE", Channel: "ANE1", States: []StateEntry{
+						{Name: "0%", Residency: 0},
+						{Name: "100%", Residency: 0},
+					}},
+				},
+			},
+			wantActivePct:  25,
+			wantPeakBucket: "0%",
+			wantPeakPct:    50,
+		},
+		{
+			name: "two active ANE devices with combined peak",
+			delta: Delta{Channels: []Channel{
+				{Group: "PMP", SubGroup: "Fast-Die CE", Channel: "ANE0", States: []StateEntry{
+					{Name: "25%", Residency: 500},
+				}},
+				{Group: "PMP", SubGroup: "Fast-Die CE", Channel: "ANE1", States: []StateEntry{
+					{Name: "75%", Residency: 1000},
+				}},
+			}},
+			wantActivePct:  50,
+			wantPeakBucket: "75%",
+			wantPeakPct:    float64(1000) / 1500 * 100,
+		},
+		{
 			name: "voltage fallback",
 			delta: Delta{
 				Duration: time.Second,
@@ -67,6 +100,18 @@ func TestComputeStats(t *testing.T) {
 			wantActivePct:  20,
 			wantPeakBucket: "",
 			wantPeakPct:    0,
+		},
+		{
+			name: "two ANE voltage devices",
+			delta: Delta{Channels: []Channel{
+				{Group: "PMP", SubGroup: "SOC Floor", Channel: "ANE0", States: []StateEntry{
+					{Name: "VMIN", Residency: 500}, {Name: "VNOM", Residency: 500},
+				}},
+				{Group: "PMP", SubGroup: "SOC Floor", Channel: "ANE1", States: []StateEntry{
+					{Name: "VMIN", Residency: 1000}, {Name: "VNOM", Residency: 0},
+				}},
+			}},
+			wantActivePct: 25,
 		},
 		{
 			name: "interrupts and throttles",
@@ -95,6 +140,19 @@ func TestComputeStats(t *testing.T) {
 			},
 			checkClusterActive: true,
 			wantClusterActive:  80,
+		},
+		{
+			name: "two ANE power clusters",
+			delta: Delta{Channels: []Channel{
+				{Group: "SoC Stats", SubGroup: "Cluster Power States", Channel: "PACC0_ANE", States: []StateEntry{
+					{Name: "ACT", Residency: 800}, {Name: "INACT", Residency: 200},
+				}},
+				{Group: "SoC Stats", SubGroup: "Cluster Power States", Channel: "PACC1_ANE", States: []StateEntry{
+					{Name: "ACT", Residency: 0}, {Name: "INACT", Residency: 1000},
+				}},
+			}},
+			checkClusterActive: true,
+			wantClusterActive:  40,
 		},
 		{
 			name: "gpu active residency",

@@ -7,13 +7,14 @@ import "strings"
 // DeltaStats contains derived metrics computed from a Delta.
 type DeltaStats struct {
 	ActivePct        float64 // weighted CE utilization or voltage fallback
+	ActiveSource     string  // "compute", "voltage", or "none"
 	PeakCEBucket     string  // CE bucket with highest residency ("0%", "45%", etc.)
 	PeakCEPct        float64 // residency % in that peak bucket
 	TotalInterrupts  int64
 	InterruptRate    float64 // interrupts/sec (using Delta.Duration)
 	TotalThrottles   int64
 	GPUActivePct     float64            // GPU active residency from GPU performance states
-	ClusterActivePct float64            // first PACC*_ANE channel ACT / (ACT+INACT) * 100
+	ClusterActivePct float64            // average ACT residency across PACC*_ANE clusters
 	ThrottleReasons  map[string]float64 // throttle name → ACT residency %
 }
 
@@ -23,9 +24,15 @@ func ComputeStats(d Delta) DeltaStats {
 	var s DeltaStats
 
 	// Active percentage — prefer Fast-Die CE histogram, fall back to voltage.
-	s.ActivePct = computeActivePct(cat.ComputeEn)
-	if s.ActivePct == 0 {
-		s.ActivePct = computeVoltageActivePct(cat.Voltage)
+	var hasComputeSamples bool
+	s.ActivePct, hasComputeSamples = computeActivePct(cat.ComputeEn)
+	if hasComputeSamples {
+		s.ActiveSource = "compute"
+	} else if voltagePct, hasVoltageSamples := computeVoltageActivePct(cat.Voltage); hasVoltageSamples {
+		s.ActivePct = voltagePct
+		s.ActiveSource = "voltage"
+	} else {
+		s.ActiveSource = "none"
 	}
 
 	// Peak CE bucket.
@@ -60,12 +67,17 @@ func ComputeStats(d Delta) DeltaStats {
 	return s
 }
 
-// computeActivePct computes weighted average CE utilization from Fast-Die CE channels.
-func computeActivePct(channels []Channel) float64 {
+// computeActivePct averages the utilization of all Fast-Die compute clusters.
+// A cluster with no residency contributes zero when another cluster sampled.
+func computeActivePct(channels []Channel) (float64, bool) {
+	var clusterSum float64
+	var clusterCount int
+	var hasSamples bool
 	for _, ch := range channels {
 		if len(ch.States) == 0 {
 			continue
 		}
+		clusterCount++
 		var totalRes int64
 		var weightedSum float64
 		for _, s := range ch.States {
@@ -76,19 +88,26 @@ func computeActivePct(channels []Channel) float64 {
 			weightedSum += pct * float64(s.Residency)
 		}
 		if totalRes > 0 {
-			return weightedSum / float64(totalRes)
+			clusterSum += weightedSum / float64(totalRes)
+			hasSamples = true
 		}
 	}
-	return 0
+	if !hasSamples {
+		return 0, false
+	}
+	return clusterSum / float64(clusterCount), true
 }
 
-// computeVoltageActivePct computes active percentage from voltage state channels.
-func computeVoltageActivePct(channels []Channel) float64 {
-	maxActive := 0.0
+// computeVoltageActivePct averages non-VMIN residency across ANE voltage channels.
+func computeVoltageActivePct(channels []Channel) (float64, bool) {
+	var activeSum float64
+	var channelCount int
+	var hasSamples bool
 	for _, ch := range channels {
 		if len(ch.States) == 0 {
 			continue
 		}
+		channelCount++
 		var total, vminRes int64
 		hasVMIN := false
 		for _, s := range ch.States {
@@ -99,48 +118,57 @@ func computeVoltageActivePct(channels []Channel) float64 {
 			}
 		}
 		if hasVMIN && total > 0 {
-			active := float64(total-vminRes) / float64(total) * 100
-			if active > maxActive {
-				maxActive = active
-			}
+			activeSum += float64(total-vminRes) / float64(total) * 100
+			hasSamples = true
 		}
 	}
-	return maxActive
+	if !hasSamples {
+		return 0, false
+	}
+	return activeSum / float64(channelCount), true
 }
 
-// peakCEBucket returns the CE bucket name and its residency percentage.
+// peakCEBucket combines the CE histograms of every compute cluster.
 func peakCEBucket(channels []Channel) (string, float64) {
+	residencyByBucket := make(map[string]int64)
+	var bucketOrder []string
+	var total int64
 	for _, ch := range channels {
-		if len(ch.States) == 0 {
-			continue
-		}
-		var total int64
 		for _, s := range ch.States {
+			if s.Residency <= 0 {
+				continue
+			}
+			name := strings.TrimSpace(s.Name)
+			if _, ok := residencyByBucket[name]; !ok {
+				bucketOrder = append(bucketOrder, name)
+			}
+			residencyByBucket[name] += s.Residency
 			total += s.Residency
 		}
-		if total == 0 {
-			continue
-		}
-		peakName := ""
-		peakPct := 0.0
-		for _, s := range ch.States {
-			pct := float64(s.Residency) / float64(total) * 100
-			if pct > peakPct {
-				peakPct = pct
-				peakName = strings.TrimSpace(s.Name)
-			}
-		}
-		return peakName, peakPct
 	}
-	return "", 0
+	if total == 0 {
+		return "", 0
+	}
+	peakName := ""
+	var peakResidency int64
+	for _, name := range bucketOrder {
+		if residencyByBucket[name] > peakResidency {
+			peakName = name
+			peakResidency = residencyByBucket[name]
+		}
+	}
+	return peakName, float64(peakResidency) / float64(total) * 100
 }
 
-// computeClusterActivePct returns the ACT residency percentage across cluster power channels.
+// computeClusterActivePct averages ACT residency across cluster power channels.
 func computeClusterActivePct(channels []Channel) float64 {
+	var activeSum float64
+	var channelCount int
 	for _, ch := range channels {
 		if len(ch.States) == 0 {
 			continue
 		}
+		channelCount++
 		var actRes, total int64
 		for _, s := range ch.States {
 			total += s.Residency
@@ -149,10 +177,13 @@ func computeClusterActivePct(channels []Channel) float64 {
 			}
 		}
 		if total > 0 {
-			return float64(actRes) / float64(total) * 100
+			activeSum += float64(actRes) / float64(total) * 100
 		}
 	}
-	return 0
+	if channelCount == 0 {
+		return 0
+	}
+	return activeSum / float64(channelCount)
 }
 
 func computeGPUActivePct(channels []Channel) float64 {

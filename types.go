@@ -9,15 +9,16 @@ import (
 
 // Sample represents a point-in-time snapshot of ANE performance counters.
 type Sample struct {
-	Timestamp           time.Time  `json:"timestamp"`
-	Device              DeviceInfo `json:"device"`
-	ANEPowerW           float64    `json:"ane_power_watts,omitempty"`
-	ANEUtilizationPct   float64    `json:"ane_utilization_pct"`
-	ANEClusterActivePct float64    `json:"ane_cluster_active_pct"`
-	GPUPowerW           float64    `json:"gpu_power_watts,omitempty"`
-	GPUActivePct        float64    `json:"gpu_active_pct,omitempty"`
-	GPUTempC            float64    `json:"gpu_temp_c,omitempty"`
-	Channels            []Channel  `json:"channels,omitempty"`
+	Timestamp            time.Time  `json:"timestamp"`
+	Device               DeviceInfo `json:"device"`
+	ANEPowerW            float64    `json:"ane_power_watts,omitempty"`
+	ANEUtilizationPct    float64    `json:"ane_utilization_pct"`
+	ANEUtilizationSource string     `json:"ane_utilization_source"`
+	ANEClusterActivePct  float64    `json:"ane_cluster_active_pct"`
+	GPUPowerW            float64    `json:"gpu_power_watts,omitempty"`
+	GPUActivePct         float64    `json:"gpu_active_pct,omitempty"`
+	GPUTempC             float64    `json:"gpu_temp_c,omitempty"`
+	Channels             []Channel  `json:"channels,omitempty"`
 }
 
 // Channel represents a single IOReport channel with its current value or states.
@@ -45,15 +46,16 @@ type Snapshot struct {
 
 // Delta contains the difference between two snapshots.
 type Delta struct {
-	Duration            time.Duration `json:"duration"`
-	Device              DeviceInfo    `json:"device"`
-	PowerW              float64       `json:"ane_power_watts"`
-	ANEUtilizationPct   float64       `json:"ane_utilization_pct"`
-	ANEClusterActivePct float64       `json:"ane_cluster_active_pct"`
-	GPUPowerW           float64       `json:"gpu_power_watts,omitempty"`
-	GPUActivePct        float64       `json:"gpu_active_pct,omitempty"`
-	GPUTempC            float64       `json:"gpu_temp_c,omitempty"`
-	Channels            []Channel     `json:"channels,omitempty"`
+	Duration             time.Duration `json:"duration"`
+	Device               DeviceInfo    `json:"device"`
+	PowerW               float64       `json:"ane_power_watts"`
+	ANEUtilizationPct    float64       `json:"ane_utilization_pct"`
+	ANEUtilizationSource string        `json:"ane_utilization_source"`
+	ANEClusterActivePct  float64       `json:"ane_cluster_active_pct"`
+	GPUPowerW            float64       `json:"gpu_power_watts,omitempty"`
+	GPUActivePct         float64       `json:"gpu_active_pct,omitempty"`
+	GPUTempC             float64       `json:"gpu_temp_c,omitempty"`
+	Channels             []Channel     `json:"channels,omitempty"`
 }
 
 // Metric selects which categories of metrics ReportMetrics emits.
@@ -174,7 +176,7 @@ func (d Delta) ReportMetrics(b interface{ ReportMetric(float64, string) }, metri
 	// Report derived stats from newly classified channels.
 	if mask.has(MetricCompute) || mask.has(MetricCluster) || mask.has(MetricThrottle) {
 		stats := ComputeStats(d)
-		if mask.has(MetricCompute) && stats.ActivePct > 0 {
+		if mask.has(MetricCompute) && stats.ActiveSource == "compute" && stats.ActivePct > 0 {
 			b.ReportMetric(stats.ActivePct, "ane-compute-%")
 		}
 		if mask.has(MetricCluster) && stats.ClusterActivePct > 0 {

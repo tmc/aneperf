@@ -127,6 +127,34 @@ func TestReportMetricsIgnoresGPUEnergy(t *testing.T) {
 	}
 }
 
+func TestVoltageFallbackIsNotReportedAsCompute(t *testing.T) {
+	voltage := Delta{Channels: []Channel{
+		{Group: "PMP", SubGroup: "SOC Floor", Channel: "ANE1-AF-BW", States: []StateEntry{
+			{Name: "VMIN", Residency: 800}, {Name: "VNOM", Residency: 200},
+		}},
+	}}
+	stats := ComputeStats(voltage)
+	if stats.ActiveSource != "voltage" || stats.ActivePct != 20 {
+		t.Fatalf("voltage fallback: source=%q pct=%v", stats.ActiveSource, stats.ActivePct)
+	}
+	reporter := &metricReporter{}
+	voltage.ReportMetrics(reporter, MetricCompute)
+	if len(reporter.metrics) != 0 {
+		t.Fatalf("reported voltage activity as compute: %+v", reporter.metrics)
+	}
+
+	compute := Delta{Channels: []Channel{
+		{Group: "PMP", SubGroup: "Fast-Die CE", Channel: "ANE0", States: []StateEntry{
+			{Name: "0%", Residency: 800}, {Name: "100%", Residency: 200},
+		}},
+	}}
+	reporter = &metricReporter{}
+	compute.ReportMetrics(reporter, MetricCompute)
+	if len(reporter.metrics) != 1 || reporter.metrics[0].unit != "ane-compute-%" || reporter.metrics[0].value != 20 {
+		t.Fatalf("compute metric: %+v", reporter.metrics)
+	}
+}
+
 func TestDurationMilliseconds(t *testing.T) {
 	tests := []struct {
 		name string

@@ -2,6 +2,16 @@
 
 Apple Neural Engine performance monitoring for macOS, with lightweight GPU telemetry.
 
+On Macs with more than one H11ANE device (for example, two 16-core devices),
+`num_cores` is the sum across devices. Verbose JSON includes the individual
+devices in `device.instances`. Compute utilization averages all Fast-Die CE
+clusters instead of taking the first cluster only.
+`ane_utilization_source` reports `compute` for a populated Fast-Die CE
+histogram, `voltage` for the voltage-residency fallback, or `none` when neither
+counter is available. The voltage fallback indicates power-state activity; it
+is not compute utilization. On the tested M6 (h18g), Fast-Die CE remained empty
+even under an ANE convolution workload, so compute utilization was unavailable.
+
 aneperf samples ANE energy, power management state residency, interrupt
 statistics, and a small GPU metrics surface using Apple's private IOReport and
 IOKit APIs via

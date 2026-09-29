@@ -202,8 +202,10 @@ function classifyChannels(channels) {
 }
 
 function computeActivePctFromCE(channels) {
+  let clusterSum = 0, clusterCount = 0, hasSamples = false;
   for (const ch of channels) {
     if (!ch.states || ch.states.length === 0) continue;
+    clusterCount++;
     let totalRes = 0, weightedSum = 0;
     for (const s of ch.states) {
       totalRes += s.residency_ns;
@@ -211,26 +213,29 @@ function computeActivePctFromCE(channels) {
       const pct = parseFloat(name) || 0;
       weightedSum += pct * s.residency_ns;
     }
-    if (totalRes > 0) return weightedSum / totalRes;
+    if (totalRes > 0) {
+      clusterSum += weightedSum / totalRes;
+      hasSamples = true;
+    }
   }
-  return 0;
+  return hasSamples ? clusterSum / clusterCount : null;
 }
 
 function computeActivePctFromVoltage(channels) {
-  let maxActive = 0;
+  let activeSum = 0, channelCount = 0;
   for (const ch of channels) {
     if (!ch.states || ch.states.length === 0) continue;
+    channelCount++;
     let total = 0, vminRes = 0, hasVMIN = false;
     for (const s of ch.states) {
       total += s.residency_ns;
       if (s.name.trim() === 'VMIN') { vminRes = s.residency_ns; hasVMIN = true; }
     }
     if (hasVMIN && total > 0) {
-      const active = (total - vminRes) / total * 100;
-      if (active > maxActive) maxActive = active;
+      activeSum += (total - vminRes) / total * 100;
     }
   }
-  return maxActive;
+  return channelCount > 0 ? activeSum / channelCount : 0;
 }
 
 function computeGPUActivePct(channels) {
@@ -455,7 +460,7 @@ function App() {
   const durationMs = delta.duration ? delta.duration / 1e6 : 1000;
 
   let activePct = computeActivePctFromCE(cat.computeEn);
-  if (activePct === 0) activePct = computeActivePctFromVoltage(cat.voltage);
+  if (activePct === null) activePct = computeActivePctFromVoltage(cat.voltage);
   const gpuActivePct = delta.gpu_active_pct || computeGPUActivePct(cat.gpuStats);
   const clusterSummary = summarizeClusterPower(cat.clusterPower);
   const aneEnergy = summarizeEnergyRows(cat.energy, durationMs, isANEEnergyChannel);
@@ -465,7 +470,7 @@ function App() {
     <div class="app-shell">
       <${DeviceHeader} dev=${dev} connected=${connected} clusterSummary=${clusterSummary} />
       <div class="summary-grid">
-        <div class="summary-card"><${PowerSection} powerW=${delta.ane_power_watts} activePct=${activePct} history=${historyRef.current} energyRows=${aneEnergy} durationMs=${durationMs} /></div>
+        <div class="summary-card"><${PowerSection} powerW=${delta.ane_power_watts} activePct=${activePct} activeSource=${delta.ane_utilization_source || 'none'} history=${historyRef.current} energyRows=${aneEnergy} durationMs=${durationMs} /></div>
         ${cat.gpuStats.length > 0 || delta.gpu_power_watts > 0 || gpuEnergy.length > 0 ? html`<div class="summary-card"><${GPUSection} powerW=${delta.gpu_power_watts || 0} activePct=${gpuActivePct} tempC=${delta.gpu_temp_c || 0} history=${gpuHistoryRef.current} channels=${cat.gpuStats} energyRows=${gpuEnergy} /></div>` : null}
       </div>
       <div class="detail-grid">
@@ -513,10 +518,10 @@ function powerStats(history) {
   return { min, avg: sum / history.length, max };
 }
 
-function PowerSection({ powerW, activePct, history, energyRows, durationMs }) {
+function PowerSection({ powerW, activePct, activeSource, history, energyRows, durationMs }) {
   const barPct = Math.min(activePct, 100);
   const ps = powerStats(history);
-  const efficiency = activePct > 0 ? (powerW / activePct) : null;
+  const efficiency = activeSource === 'compute' && activePct > 0 ? (powerW / activePct) : null;
   const measuredSec = durationMs / 1000;
   const activeNow = powerW > 0.05 || activePct > 1;
   return html`
@@ -536,10 +541,10 @@ function PowerSection({ powerW, activePct, history, energyRows, durationMs }) {
         <span class="metric-chip">window ${measuredSec.toFixed(3)}s</span>
         ${efficiency !== null ? html`<span class="metric-chip">eff ${efficiency.toFixed(4)} W/%</span>` : null}
       </div>
-      <div class="compact-note" style="margin-top:6px">ANE Active</div>
+      <div class="compact-note" style="margin-top:6px">${activeSource === 'compute' ? 'ANE Compute' : activeSource === 'voltage' ? 'ANE Voltage Activity' : 'ANE Activity'}</div>
       <div class="bar-outer">
         <div class="bar-inner" style="width:${barPct}%;background:var(--green);opacity:0.6"></div>
-        <span class="bar-label">${activePct.toFixed(1)}%</span>
+        <span class="bar-label">${activeSource === 'none' ? 'unavailable' : activePct.toFixed(1) + '%'}</span>
       </div>
       <${Sparkline} data=${history} emptyLabel="No recent ANE draw." />
       ${energyRows.length > 0 ? html`
